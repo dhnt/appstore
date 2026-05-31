@@ -1,0 +1,74 @@
+# NVIDIA k8s-device-plugin
+#
+# Advertises `nvidia.com/gpu: <count>` on every node that has at least
+# one NVIDIA GPU + the host-OS NVIDIA driver + container toolkit
+# installed. Once this DaemonSet is healthy on an outpost, k3s
+# accepts Pod specs that include `resources.limits."nvidia.com/gpu": N`
+# and the scheduler will land them on a GPU-bearing node.
+#
+# Pinned to v0.15.0 — known-good with k3s 1.30+. Bump cadence: every
+# 6 months, after a manual smoke on a GPU outpost.
+#
+# Pod-level prereq on the outpost host:
+#   1. NVIDIA driver installed (nvidia-smi must succeed in the host
+#      shell — not just inside a container).
+#   2. NVIDIA container toolkit configured for containerd:
+#        /etc/containerd/config.toml has
+#          [plugins."io.containerd.grpc.v1.cri".containerd]
+#          default_runtime_name = "nvidia"
+#      (or runc + nvidia-container-runtime via /etc/nvidia-container-runtime/config.toml)
+#   3. `outpost builtins set --cluster-mode=agent` (real k3s-agent, not
+#      vkpodman — vkpodman doesn't translate device limits to host
+#      device mounts yet).
+#
+# Source: https://github.com/NVIDIA/k8s-device-plugin/blob/v0.15.0/deployments/static/nvidia-device-plugin.yml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+    spec:
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      # Avoid scheduling onto nodes that explicitly don't have an NVIDIA
+      # GPU. nodeAffinity + the standard NVIDIA node-feature-discovery
+      # label is the canonical pattern, but cloudbox doesn't run NFD —
+      # so we rely on tolerations + a soft nodeSelector that hosts can
+      # set manually (`kubectl label node <name> gpu=nvidia`). Without
+      # the label the DaemonSet runs everywhere; the plugin self-exits
+      # on FAIL_ON_INIT_ERROR=false when no GPU is found, which is the
+      # behavior we want.
+      priorityClassName: "system-node-critical"
+      containers:
+      - image: nvcr.io/nvidia/k8s-device-plugin:v0.15.0
+        name: nvidia-device-plugin-ctr
+        env:
+        - name: FAIL_ON_INIT_ERROR
+          # Don't crashloop on no-GPU nodes — k3s schedules this onto
+          # every node by default. The plugin needs to exit cleanly so
+          # the DaemonSet doesn't pollute the cluster's event stream
+          # with crashloops on every CPU-only outpost.
+          value: "false"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins

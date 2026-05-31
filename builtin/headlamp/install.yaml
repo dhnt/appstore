@@ -1,0 +1,104 @@
+# Headlamp — Kubernetes dashboard from kubernetes-sigs/headlamp.
+#
+# Same bootstrap-Job pattern as kubeflow / training-operators /
+# pachyderm. The Job runs `helm install` against the upstream
+# Headlamp chart at https://kubernetes-sigs.github.io/headlamp/,
+# pinned to chart 0.42.0 (app v0.41.0).
+#
+# Post-install Headlamp is reachable in-cluster at
+#   http://headlamp.headlamp.svc.cluster.local
+# and through cloudbox's existing service proxy at
+#   https://ai.dhnt.io/cluster/svc/headlamp/headlamp/
+#
+# Two cloudbox-specific tunings via --set:
+#   1. config.baseURL — Headlamp's frontend assets resolve relative
+#      to this prefix. Without it, assets reference `/static/*` at
+#      the apex which 404s through our service proxy.
+#   2. config.inCluster=true — Headlamp uses its own ServiceAccount
+#      token to dial the apiserver. Combined with the
+#      cloudbox.dhnt.io/inject-user-token=true label on the Service
+#      (set by this manifest), cloudbox's ClusterServiceDirectProxy
+#      stamps the *caller's* user-SA token onto requests bound for
+#      this Service, so the apiserver enforces per-user RBAC.
+#      Net effect: Headlamp sees pods in user-<hash> namespace only.
+#
+# Pinned to chart 0.42.0 / app v0.41.0. Bump cadence: every 6 months,
+# after a smoke on a dev cluster.
+#
+# Caveats:
+#   - Requires cluster egress to artifacthub.io for the Helm chart pull
+#     (`alpine/helm` image downloads it at install time).
+#   - The headlamp-installer ServiceAccount + cluster-admin binding
+#     persist after the Job's TTL; operator deletes them when
+#     comfortable. Alternative: re-run /api/cluster/install/headlamp
+#     to refresh.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: headlamp
+  labels:
+    outpost.dhnt.io/managed: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: headlamp-installer
+  namespace: headlamp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: headlamp-installer-admin
+  labels:
+    outpost.dhnt.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: headlamp-installer
+  namespace: headlamp
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: install-headlamp
+  namespace: headlamp
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: headlamp-installer
+      restartPolicy: OnFailure
+      containers:
+      - name: installer
+        image: alpine/helm:3.15.2
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -euo pipefail
+          CHART_REF=0.42.0
+          echo "==> add Headlamp helm repo"
+          helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+          helm repo update
+          echo "==> helm install/upgrade headlamp"
+          helm upgrade --install headlamp headlamp/headlamp \
+            --version ${CHART_REF} \
+            --namespace headlamp \
+            --set config.baseURL=/cluster/svc/headlamp/headlamp \
+            --set config.inCluster=true \
+            --wait \
+            --timeout 5m
+          echo "==> label the Service so cluster-svc-proxy injects the caller's SA token"
+          kubectl label svc headlamp -n headlamp \
+            cloudbox.dhnt.io/inject-user-token=true --overwrite
+          echo "==> Headlamp install complete"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1
+            memory: 512Mi

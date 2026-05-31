@@ -1,0 +1,219 @@
+# SeaweedFS — single-pod all-in-one deployment.
+#
+# Runs master + volume + filer + S3 gateway in one `weed server`
+# container, backed by a 50 GiB local-path PVC. Suitable for v1 of
+# DKS-on-outposts (single-node ML storage). Not HA — re-running
+# `install/seaweedfs` doesn't add replicas.
+#
+# Endpoints (in-cluster only):
+#   http://seaweedfs-s3.seaweedfs-system.svc.cluster.local:8333  (S3-compatible API)
+#   http://seaweedfs-filer.seaweedfs-system.svc.cluster.local:8888 (filer HTTP)
+#
+# Pachyderm's bundle (Phase 4) points at the S3 endpoint above as its
+# object-storage backend. ML workloads can use boto3/aws-sdk against
+# the same endpoint with credentials below.
+#
+# Default credentials (CHANGE BEFORE PROD USE):
+#   accessKey: admin
+#   secretKey: change-me-on-install
+# Rotate by editing the seaweedfs-s3-config ConfigMap and bouncing the
+# StatefulSet.
+#
+# Pinned to chrislusf/seaweedfs:3.71 — known-good. Bump cadence:
+# every 6 months, after a smoke on a dev cluster.
+#
+# Follow-on commits (deferred):
+#   - SeaweedFS CSI driver for PVC mounts (today: S3 access only)
+#   - Multi-volume replication for HA
+#   - Authenticated filer HTTP for non-S3 clients
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: seaweedfs-system
+  labels:
+    outpost.dhnt.io/managed: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seaweedfs-s3-config
+  namespace: seaweedfs-system
+data:
+  # Two identities: anonymous (read-only listing, handy for public ML
+  # datasets) and admin (full access). Pachyderm + Kubeflow pipelines
+  # use the admin credential; rotate it by editing this ConfigMap and
+  # rolling out the StatefulSet (`kubectl rollout restart sts/seaweedfs
+  # -n seaweedfs-system`).
+  s3.json: |
+    {
+      "identities": [
+        {
+          "name": "anonymous",
+          "actions": ["Read", "List"]
+        },
+        {
+          "name": "admin",
+          "credentials": [
+            {"accessKey": "admin", "secretKey": "change-me-on-install"}
+          ],
+          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: seaweedfs
+  namespace: seaweedfs-system
+spec:
+  serviceName: seaweedfs
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seaweedfs
+  template:
+    metadata:
+      labels:
+        app: seaweedfs
+    spec:
+      containers:
+      - name: weed
+        image: chrislusf/seaweedfs:3.71
+        # `weed server` runs all the SeaweedFS daemons in a single
+        # process: master (chunk locations), volume (chunk storage),
+        # filer (POSIX-ish layer), s3 (S3 gateway). One pod is the
+        # minimum viable; multi-pod requires master raft + volume
+        # replication which is intentionally out of scope for v1.
+        args:
+        - server
+        - -master.dir=/data/m
+        - -volume.dir.idx=/data/i
+        - -volume.dir=/data/v
+        - -filer
+        - -s3
+        - -s3.config=/config/s3.json
+        - -master.volumeSizeLimitMB=1024
+        # 000 = no replication; rely on the single-node PVC for
+        # durability. When this is moved to multi-pod, bump to 001
+        # (1 copy on a different rack) or 010 (different DC).
+        - -master.defaultReplication=000
+        ports:
+        - containerPort: 9333   # master http
+          name: master
+        - containerPort: 19333  # master grpc
+          name: master-grpc
+        - containerPort: 8080   # volume http
+          name: volume
+        - containerPort: 18080  # volume grpc
+          name: volume-grpc
+        - containerPort: 8888   # filer http
+          name: filer
+        - containerPort: 18888  # filer grpc
+          name: filer-grpc
+        - containerPort: 8333   # s3
+          name: s3
+        readinessProbe:
+          httpGet:
+            path: /cluster/healthz
+            port: 9333
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 2
+            memory: 4Gi
+      volumes:
+      - name: config
+        configMap:
+          name: seaweedfs-s3-config
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 50Gi
+---
+# Headless service for StatefulSet DNS (seaweedfs-0.seaweedfs.seaweedfs-system.svc.cluster.local).
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  namespace: seaweedfs-system
+spec:
+  clusterIP: None
+  selector:
+    app: seaweedfs
+  ports:
+  - name: master
+    port: 9333
+  - name: master-grpc
+    port: 19333
+  - name: volume
+    port: 8080
+  - name: volume-grpc
+    port: 18080
+  - name: filer
+    port: 8888
+  - name: filer-grpc
+    port: 18888
+  - name: s3
+    port: 8333
+---
+# Stable S3 endpoint Pachyderm + ML workloads target.
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs-s3
+  namespace: seaweedfs-system
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+  - name: s3
+    port: 8333
+    targetPort: 8333
+---
+# Stable filer endpoint for non-S3 clients (kubectl exec + curl, etc.).
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs-filer
+  namespace: seaweedfs-system
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+  - name: filer
+    port: 8888
+    targetPort: 8888
+  - name: filer-grpc
+    port: 18888
+    targetPort: 18888
+---
+# Stable master endpoint for the CSI driver (future, when we ship it).
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs-master
+  namespace: seaweedfs-system
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+  - name: master
+    port: 9333
+    targetPort: 9333
+  - name: master-grpc
+    port: 19333
+    targetPort: 19333

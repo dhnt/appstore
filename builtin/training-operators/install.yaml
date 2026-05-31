@@ -1,0 +1,92 @@
+# Kubeflow Training Operator — TFJob / PyTorchJob / MPIJob /
+# XGBoostJob / JAXJob CRDs + a single controller binary.
+#
+# Same bootstrap-Job pattern as the kubeflow bundle: one-shot Job
+# applies the upstream kustomize overlay, waits for the controller
+# Deployment to roll out, then reaps itself 10 min later.
+#
+# Installs into the `kubeflow` namespace (the upstream default). If
+# the kubeflow bundle is already installed, the namespace exists +
+# the Profile controller's RBAC overlaps cleanly. Order-independent:
+# install training-operators with or without kubeflow-pipelines.
+#
+# Pinned to training-operator v1.7.0. Bump cadence: every 6 months.
+#
+# What you can submit after install:
+#   apiVersion: kubeflow.org/v1
+#   kind: PyTorchJob   (or TFJob, MPIJob, XGBoostJob, JAXJob)
+#
+# Sample PyTorch training spec ships at hub/data/standard/skills/
+# pytorch-train-cifar10.yaml (Phase 3 follow-up).
+#
+# Caveats:
+#   - Requires cluster egress to GitHub + Docker Hub.
+#   - The kubeflow-training-installer ServiceAccount + its cluster-
+#     admin binding persist after the Job's TTL elapses; operator
+#     deletes them manually or re-runs the bundle to refresh.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubeflow
+  labels:
+    outpost.dhnt.io/managed: "true"
+    control-plane: kubeflow
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeflow-training-installer
+  namespace: kubeflow
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeflow-training-installer-admin
+  labels:
+    outpost.dhnt.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: kubeflow-training-installer
+  namespace: kubeflow
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: install-kubeflow-training-operator
+  namespace: kubeflow
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: kubeflow-training-installer
+      restartPolicy: OnFailure
+      containers:
+      - name: installer
+        image: bitnami/kubectl:1.30
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -euo pipefail
+          REF=v1.7.0
+          BASE="https://github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=${REF}"
+          echo "==> Pass 1: install CRDs + RBAC (errors-tolerated)"
+          kubectl apply -k "$BASE" || true
+          echo "==> Wait for PyTorchJob CRD to register"
+          kubectl wait --for=condition=Established crd/pytorchjobs.kubeflow.org --timeout=120s
+          echo "==> Pass 2: install workloads"
+          kubectl apply -k "$BASE"
+          echo "==> Wait for training-operator to be Ready"
+          kubectl rollout status -n kubeflow deploy/training-operator --timeout=300s
+          echo "==> Kubeflow Training Operator install complete"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1
+            memory: 512Mi

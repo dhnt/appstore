@@ -1,0 +1,134 @@
+# Kubeflow Pipelines (standalone) — bootstrap-Job install.
+#
+# Installs the upstream KFP standalone manifests (kubeflow/pipelines
+# kustomize env/dev) via a one-shot Job that runs
+# `kubectl apply -k <upstream-url>` from inside the cluster. The
+# Job carries a cluster-admin-scoped ServiceAccount (KFP install
+# legitimately needs cluster-admin to register CRDs + RBAC), runs
+# to completion, and is garbage-collected (ttlSecondsAfterFinished:
+# 600 = 10 min).
+#
+# Why a bootstrap Job instead of vendoring the manifests directly:
+#   - KFP standalone is ~1500 lines of YAML across hundreds of
+#     resources. Vendoring inline would balloon the cloudbox binary
+#     by ~50 KB and bit-rot quickly as upstream evolves.
+#   - The kustomize apply pattern is the canonical upstream install
+#     path; any cluster with internet egress runs it the same way.
+#   - The Job's image (bitnami/kubectl) is the same one operators
+#     would run themselves, so the install is reproducible offline:
+#     a user can copy the args and run them from a workstation
+#     against a downloaded user kubeconfig if cluster egress is
+#     locked down.
+#
+# Pinned to KFP 2.0.5 (kubeflow/pipelines tag). Bump cadence: every
+# 6 months, after a smoke on a dev cluster.
+#
+# Post-install endpoints (in-cluster):
+#   ml-pipeline.kubeflow.svc.cluster.local:8888  (KFP API)
+#   ml-pipeline-ui.kubeflow.svc.cluster.local:80 (KFP UI)
+#
+# Reach from the cloud-side via cluster service proxy:
+#   https://ai.dhnt.io/cluster/svc/kubeflow/ml-pipeline-ui/
+#
+# Default artifact storage points at the bundled MinIO. To re-target
+# at SeaweedFS (saves the MinIO pod):
+#   1. Install `seaweedfs` bundle first.
+#   2. After KFP install completes, patch the ml-pipeline-ui +
+#      ml-pipeline-server Deployments' env to point at
+#      http://seaweedfs-s3.seaweedfs-system.svc.cluster.local:8333 +
+#      the admin credentials from the seaweedfs-s3-config ConfigMap.
+#   3. Delete the bundled MinIO Pod; PVC stays as cold storage.
+#   Procedure documented in CLAUDE.md once SeaweedFS-as-KFP-backend
+#   is tested end-to-end.
+#
+# Caveats:
+#   - Requires cluster egress to GitHub + Docker Hub. Air-gapped
+#     deploys must vendor manifests themselves and apply offline.
+#   - Job retries on transient failures (apiserver flapping mid-CRD
+#     install is common); 3 attempts then fails the deploy. Re-run
+#     the install endpoint to retry.
+#   - The kubeflow-installer ServiceAccount is cluster-admin-scoped
+#     ONLY for the install Job's lifetime. After ttlSecondsAfterFinished
+#     elapses, the Job + Pod + SA are reaped. The KFP-internal SAs
+#     (ml-pipeline, ml-pipeline-ui, etc.) come up with the scoped
+#     RBAC the upstream manifests declare.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubeflow
+  labels:
+    outpost.dhnt.io/managed: "true"
+    # The control-plane label is what KFP's profile controller looks
+    # for to identify the "kubeflow" namespace itself; without it
+    # the controller logs warnings on every reconcile.
+    control-plane: kubeflow
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeflow-installer
+  namespace: kubeflow
+---
+# Cluster-admin binding for the installer SA. Lives only as long as
+# the Job (ttlSecondsAfterFinished reaps everything together).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeflow-installer-admin
+  labels:
+    outpost.dhnt.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: kubeflow-installer
+  namespace: kubeflow
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: install-kubeflow-pipelines
+  namespace: kubeflow
+spec:
+  # Reap the Job (and its Pods) 10 min after completion. The SA + RBAC
+  # don't get auto-reaped; operator deletes them manually or re-runs
+  # the bundle to refresh.
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: kubeflow-installer
+      restartPolicy: OnFailure
+      containers:
+      - name: installer
+        image: bitnami/kubectl:1.30
+        command: ["/bin/sh", "-c"]
+        # Two-pass apply: the first pass installs CRDs + ServiceAccounts,
+        # the second pass installs the CRDs' instances + Deployments
+        # that depend on them. Without this, CRD-bearing resources fail
+        # to register on the first apply because their kinds aren't
+        # registered yet.
+        args:
+        - |
+          set -euo pipefail
+          KFP_REF=2.0.5
+          BASE="https://github.com/kubeflow/pipelines/manifests/kustomize/env/dev?ref=${KFP_REF}"
+          echo "==> Pass 1: install CRDs + RBAC (errors-tolerated)"
+          kubectl apply -k "$BASE" || true
+          echo "==> Wait for ScheduledWorkflow CRD to register"
+          kubectl wait --for=condition=Established crd/scheduledworkflows.kubeflow.org --timeout=180s
+          echo "==> Pass 2: install workloads"
+          kubectl apply -k "$BASE"
+          echo "==> Wait for ml-pipeline + ml-pipeline-ui to be Ready"
+          kubectl rollout status -n kubeflow deploy/ml-pipeline --timeout=300s
+          kubectl rollout status -n kubeflow deploy/ml-pipeline-ui --timeout=180s
+          echo "==> Kubeflow Pipelines install complete"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1
+            memory: 512Mi

@@ -1,0 +1,158 @@
+# Pachyderm Community Edition — data versioning + pipelines layered
+# over SeaweedFS' S3 gateway.
+#
+# Same bootstrap-Job pattern as kubeflow + training-operators. The
+# Job's installer container runs `helm` against the upstream Pachyderm
+# chart (Helm CLI ships in the bitnami/kubectl image with `helm`
+# pre-installed via the bitnami/helm image; we use the alpine/helm
+# image for a smaller pull surface).
+#
+# **Precondition**: the `seaweedfs` bundle must be installed first.
+# Pachyderm's storage config points at
+# http://seaweedfs-s3.seaweedfs-system.svc.cluster.local:8333 with
+# the admin/change-me-on-install credentials from the
+# seaweedfs-s3-config ConfigMap. The bundle handler returns 412
+# Precondition Failed if seaweedfs isn't installed (lightweight
+# in-handler check; see hub/internal/handlers/cluster_bundle.go for
+# the requires-map).
+#
+# Pinned to Pachyderm CE 2.10. Bump cadence: every 6 months.
+#
+# Post-install endpoints (in-cluster):
+#   pachd.pachyderm.svc.cluster.local:30650     (Pachyderm gRPC API)
+#   pachd.pachyderm.svc.cluster.local:30657     (Pachyderm HTTP/S3)
+#   pachyderm-console.pachyderm.svc.cluster.local:4000  (Console UI)
+#
+# Reach from the cloud side:
+#   https://ai.dhnt.io/cluster/svc/pachyderm/pachyderm-console/
+#
+# Workstation-side: `pachctl` configured via
+#   pachctl config set context dks --pachd-address=https://ai.dhnt.io/cluster/svc/pachyderm/pachd:30650
+# (Pachyderm 2.x supports HTTP-based pachd; the gRPC path requires
+# port-forwarding through kubectl which works against the downloaded
+# cloudbox user kubeconfig.)
+#
+# Caveats:
+#   - Requires `seaweedfs` bundle installed first (412 enforced).
+#   - Requires cluster egress to GitHub + Docker Hub.
+#   - The pachyderm-installer SA + cluster-admin binding persist;
+#     delete after install if you want to revoke admin.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pachyderm
+  labels:
+    outpost.dhnt.io/managed: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pachyderm-installer
+  namespace: pachyderm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pachyderm-installer-admin
+  labels:
+    outpost.dhnt.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: pachyderm-installer
+  namespace: pachyderm
+---
+# Values for the upstream pachyderm-CE helm chart, pre-templated to
+# point at SeaweedFS' in-cluster S3 endpoint. Operators bump the
+# credentials by editing this ConfigMap and re-running the install
+# bundle. Mirrors the seaweedfs-s3-config ConfigMap's defaults.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pachyderm-values
+  namespace: pachyderm
+data:
+  values.yaml: |
+    deployTarget: CUSTOM
+    pachd:
+      enabled: true
+      storage:
+        backend: AMAZON
+        amazon:
+          bucket: pachyderm
+          customEndpoint: http://seaweedfs-s3.seaweedfs-system.svc.cluster.local:8333
+          disableSSL: true
+          forcePathStyle: true
+          id: admin
+          # CHANGE BEFORE PROD — must match seaweedfs-s3-config.
+          secret: change-me-on-install
+          region: us-east-1
+          retries: 5
+      lokiDeploy: false  # we don't ship Loki in the substrate
+      lokiLogging: false
+    console:
+      enabled: true
+    proxy:
+      enabled: false
+    postgresql:
+      enabled: true  # Pachyderm needs its own pg for metadata
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: install-pachyderm
+  namespace: pachyderm
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: pachyderm-installer
+      restartPolicy: OnFailure
+      volumes:
+      - name: values
+        configMap:
+          name: pachyderm-values
+      containers:
+      - name: installer
+        # alpine/helm bundles helm + kubectl + a few CA roots; total
+        # image size ~50MB.
+        image: alpine/helm:3.15.2
+        command: ["/bin/sh", "-c"]
+        volumeMounts:
+        - name: values
+          mountPath: /values
+        args:
+        - |
+          set -euo pipefail
+          REF=2.10.0
+          echo "==> add Pachyderm helm repo"
+          helm repo add pach https://helm.pachyderm.com
+          helm repo update
+          echo "==> Pre-flight: confirm seaweedfs is reachable"
+          # Tiny TCP probe via /dev/tcp before helm install — saves a
+          # 5-minute helm timeout if seaweedfs isn't installed.
+          if ! getent hosts seaweedfs-s3.seaweedfs-system.svc.cluster.local >/dev/null 2>&1; then
+            echo "FATAL: seaweedfs-s3 service is not in cluster DNS."
+            echo "Install the 'seaweedfs' bundle first:"
+            echo "  curl -X POST https://ai.dhnt.io/api/cluster/install/seaweedfs"
+            exit 78  # EX_CONFIG
+          fi
+          echo "==> helm install/upgrade pachyderm"
+          helm upgrade --install pachyderm pach/pachyderm \
+            --version ${REF} \
+            --namespace pachyderm \
+            --values /values/values.yaml \
+            --wait \
+            --timeout 10m
+          echo "==> Pachyderm install complete"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1
+            memory: 768Mi

@@ -1,0 +1,26 @@
+# core-storage: mark k3s' built-in `local-path` StorageClass as the
+# cluster default, so PVCs without an explicit storageClassName bind
+# instead of staying Pending forever.
+#
+# k3s ships rancher/local-path-provisioner and registers a StorageClass
+# named "local-path" — but does NOT annotate it as the default class.
+# Helm charts (Argo CD HA Redis, Postgres/MariaDB/etcd, Grafana, every
+# `volumeClaimTemplates` consumer) assume a default SC exists. Without
+# this annotation those PVCs hang.
+#
+# This bundle is a pure SSA patch: cloudbox-bundle:core-storage owns
+# only the annotation. The provisioner / reclaimPolicy / volumeBindingMode
+# fields stay owned by k3s' applier so future k3s upgrades don't conflict
+# on them. The fields we DO send match k3s' defaults to keep SSA from
+# rejecting on equivalence checks if the SC doesn't exist yet (fresh
+# cluster, local-path-provisioner pod not up yet — bundle still applies
+# correctly and the SC takes effect once the provisioner reconciles).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
