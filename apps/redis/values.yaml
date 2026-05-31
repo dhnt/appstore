@@ -1,5 +1,14 @@
 # Bitnami redis chart defaults that diverge from upstream.
 architecture: standalone   # 1 master, no replicas — fits a user namespace
+# Bitnami's 2025 policy migration retired free images at the
+# docker.io/bitnami/<x> path; the freely-pullable copies now live
+# at docker.io/bitnamilegacy/<x>. The chart's default image pointer
+# still says bitnami/redis which 404s. Override to the legacy path
+# until the chart's defaults catch up (or until we migrate to
+# bitnami-charts/community or a paid Bitnami Secure mirror).
+image:
+  registry: docker.io
+  repository: bitnamilegacy/redis
 auth:
   enabled: true
 master:
