@@ -14,7 +14,7 @@ metadata:
     and cost-cap across OpenAI, Anthropic, Bedrock, Vertex, Ollama,
     vLLM, and friends.
   homepage: https://litellm.ai
-  featured: true
+  featured: false
 spec:
   chart:
     repo: https://berriai.github.io/litellm-helm

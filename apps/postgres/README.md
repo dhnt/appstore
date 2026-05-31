@@ -40,3 +40,28 @@ kubectl get secret postgres-<suffix>-postgresql -n user-<hash> \
 
 Override at install time in the Cloudbox SPA's install dialog if
 you need a heavier footprint.
+
+## Tested performance
+
+| Workload | Metric | Result |
+|---|---|---|
+| install → primary Ready | install time | _not yet measured_ |
+| CREATE/INSERT/SELECT roundtrip | smoke pass | _not yet measured_ |
+| 8 GiB PVC bind | bound | _not yet measured_ |
+
+Postgres is the second-tier install canary — after redis passes,
+this verifies that init-container + secret-mount + larger-PVC
+paths also work.
+
+## Reproducing these numbers
+
+```
+git clone https://github.com/dhnt/appstore
+cd appstore/apps/postgres/test
+export KUBECONFIG=~/.kube/config
+./e2e.sh
+```
+
+## License
+
+PostgreSQL License (MIT-style) — https://www.postgresql.org/about/licence/

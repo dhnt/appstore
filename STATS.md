@@ -49,11 +49,19 @@ hardware.
 
 | App | Workload | Headline metric | Result | Tested |
 |---|---|---|---|---|
+| redis    | install → PING/SET/GET smoke   | install pipeline OK | _pending_ | _pending_ |
+| postgres | install → CREATE/INSERT/SELECT | install pipeline OK | _pending_ | _pending_ |
+| jupyter  | install → proxy-public GET /   | install pipeline OK | _pending_ | _pending_ |
 | qdrant   | 100k×384 cosine, top-10        | query p95         | _pending_ | _pending_ |
 | vllm     | TinyLlama-1.1B, batch=1, T4    | tokens/sec        | _pending_ | _pending_ |
 | librechat | login + 1 conversation         | TTFB              | _pending_ | _pending_ |
 | langfuse | 1k traces/min steady           | ingest p95        | _pending_ | _pending_ |
 | litellm  | 1 replica, OpenAI passthrough  | proxy overhead    | _pending_ | _pending_ |
+
+The top three (redis, postgres, jupyter) are **install-pipeline
+canaries** — their job is to prove the chart-pull + PVC bind +
+service path works on a given cluster. Run them in order; if redis
+fails, fix the cluster before chasing the rest.
 
 A row reads "_pending_" until the maintainers commit a populated
 `test/stats.json` for that app. Contributors are welcome to PR a
