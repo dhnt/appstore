@@ -15,6 +15,11 @@ resources:
 # (set postgresql.enabled=false + database.url=...).
 postgresql:
   enabled: true
+  # Bitnami 2025 migration: free images moved to bitnamilegacy/.
+  # See apps/postgres/values.yaml for the same override pattern.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
   primary:
     persistence:
       size: 10Gi

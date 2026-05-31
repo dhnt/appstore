@@ -1,6 +1,14 @@
 # Bitnami postgresql chart defaults that diverge from upstream.
 # Keep this list short — every override is one more thing to track
 # at chart-bump time.
+# Bitnami's 2025 policy migration retired free images at
+# docker.io/bitnami/<x>; the freely-pullable copies now live at
+# docker.io/bitnamilegacy/<x>. The chart default points at
+# bitnami/postgresql which 404s on docker.io. Override until the
+# chart's defaults catch up or we migrate to a maintained fork.
+image:
+  registry: docker.io
+  repository: bitnamilegacy/postgresql
 auth:
   # Random password; the chart auto-generates if left blank, which
   # surfaces as a Secret named `<release>-postgresql`.

@@ -24,5 +24,10 @@ mongodb:
   # bundles a subchart by default — 1 replica is plenty for a
   # single-user setup; bump if you share the install.
   enabled: true
+  # Bitnami 2025 migration: free images moved to bitnamilegacy/.
+  # See apps/postgres/values.yaml for the same override pattern.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/mongodb
   persistence:
     size: 4Gi
