@@ -12,6 +12,7 @@ metadata:
     Open-source object-relational database. The default choice for
     durable transactional storage in DKS user namespaces.
   homepage: https://postgresql.org
+  featured: true
 spec:
   chart:
     repo: https://charts.bitnami.com/bitnami

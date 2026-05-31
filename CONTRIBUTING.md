@@ -32,6 +32,7 @@ metadata:
   description: >
     Single-line summary shown in the catalog grid.
   homepage: https://postgresql.org
+  featured: false             # true → SPA renders this app in the Featured row at the top
 spec:
   chart:
     repo: https://charts.bitnami.com/bitnami
