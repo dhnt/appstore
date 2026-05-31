@@ -22,19 +22,29 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 NS="${TEST_NAMESPACE:-redis-e2e-$$}"
-RELEASE="${TEST_RELEASE:-redis-e2e}"
+# When you don't have cluster-create-ns rights (e.g. on shared DKS
+# with a per-user-ns scoped token), pass an existing namespace via
+# TEST_NAMESPACE and set TEST_CREATE_NS=0 to skip ns lifecycle ops.
+CREATE_NS="${TEST_CREATE_NS:-1}"
+RELEASE="${TEST_RELEASE:-redis-e2e-$$}"
 CHART_REPO="https://charts.bitnami.com/bitnami"
 CHART_VERSION="20.0.5"   # MUST match apps/redis/app.yaml
 
 cleanup() {
   set +e
   helm uninstall -n "$NS" "$RELEASE" --wait --timeout 2m >/dev/null 2>&1
-  kubectl delete ns "$NS" --wait=false >/dev/null 2>&1
+  if [[ "$CREATE_NS" == "1" ]]; then
+    kubectl delete ns "$NS" --wait=false >/dev/null 2>&1
+  fi
 }
 trap cleanup EXIT
 
-echo "==> Creating namespace $NS"
-kubectl create ns "$NS"
+if [[ "$CREATE_NS" == "1" ]]; then
+  echo "==> Creating namespace $NS"
+  kubectl create ns "$NS"
+else
+  echo "==> Using existing namespace $NS (TEST_CREATE_NS=0)"
+fi
 
 echo "==> Adding bitnami helm repo"
 helm repo add bitnami "$CHART_REPO" >/dev/null 2>&1 || true
