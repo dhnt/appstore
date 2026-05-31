@@ -1,0 +1,23 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: redis
+  name: Redis
+  version: "7.4"
+  categories: [cache, queue]
+  tags: [kv, popular, in-memory]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    In-memory data structure store used as a cache, queue,
+    pub/sub broker, or session store.
+  homepage: https://redis.io
+spec:
+  chart:
+    repo: https://charts.bitnami.com/bitnami
+    name: redis
+    version: "20.0.5"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

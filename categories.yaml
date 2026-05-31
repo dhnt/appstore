@@ -1,0 +1,32 @@
+# Catalog category taxonomy. Reference list — cloudbox doesn't
+# enforce membership, but the SPA filter UI prefers known categories
+# (sorted in this order; unknown values appear at the end).
+categories:
+- id: database
+  name: Database
+- id: cache
+  name: Cache & key/value
+- id: queue
+  name: Queue & messaging
+- id: storage
+  name: Object & file storage
+- id: web
+  name: Web servers & ingress
+- id: monitoring
+  name: Monitoring & observability
+- id: ci-cd
+  name: CI/CD & deployment
+- id: ml
+  name: ML & data
+- id: notebook
+  name: Notebooks & developer envs
+- id: ai-agent
+  name: AI agents & tools
+- id: collaboration
+  name: Collaboration & productivity
+- id: dev-tools
+  name: Developer tools
+- id: security
+  name: Security & secrets
+- id: other
+  name: Other

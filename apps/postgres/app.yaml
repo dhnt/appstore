@@ -1,0 +1,23 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: postgres
+  name: PostgreSQL
+  version: "16.4"
+  categories: [database]
+  tags: [storage, oltp, sql, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Open-source object-relational database. The default choice for
+    durable transactional storage in DKS user namespaces.
+  homepage: https://postgresql.org
+spec:
+  chart:
+    repo: https://charts.bitnami.com/bitnami
+    name: postgresql
+    version: "15.5.31"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

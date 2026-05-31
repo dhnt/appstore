@@ -1,0 +1,23 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: jupyter
+  name: Jupyter Notebook
+  version: "4.x"
+  categories: [notebook, ml]
+  tags: [python, ml, scipy, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Single-user Jupyter Notebook environment with scipy, pandas,
+    pytorch, and JAX preinstalled. Reach via cluster service proxy.
+  homepage: https://jupyter.org
+spec:
+  chart:
+    repo: https://jupyterhub.github.io/helm-chart/
+    name: jupyterhub
+    version: "3.3.7"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

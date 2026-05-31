@@ -1,0 +1,24 @@
+# JupyterHub chart values tuned for DKS single-user notebook usage.
+hub:
+  # Use sqlite for the hub state — fits per-user namespace, avoids
+  # the dedicated postgres pod the chart defaults to.
+  db:
+    type: sqlite-pvc
+singleuser:
+  image:
+    name: jupyter/scipy-notebook
+    tag: latest
+  storage:
+    capacity: 10Gi
+  cpu:
+    limit: 2
+    guarantee: 0.1
+  memory:
+    limit: 4G
+    guarantee: 256M
+  defaultUrl: /lab
+proxy:
+  # Disable the bundled traefik — k3s ships one cluster-wide; we
+  # rely on cloudbox's service-proxy instead.
+  service:
+    type: ClusterIP

@@ -1,0 +1,22 @@
+# Bitnami postgresql chart defaults that diverge from upstream.
+# Keep this list short — every override is one more thing to track
+# at chart-bump time.
+auth:
+  # Random password; the chart auto-generates if left blank, which
+  # surfaces as a Secret named `<release>-postgresql`.
+  postgresPassword: ""
+primary:
+  # Cloudbox per-user namespaces cap PVCs at 100 GiB total; default
+  # to 8 GiB so multiple installs fit.
+  persistence:
+    size: 8Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+metrics:
+  # Off by default — the user namespace doesn't ship Prometheus.
+  enabled: false
