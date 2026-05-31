@@ -4,6 +4,10 @@ Public catalog of installable apps + cloudbox-shipped builtin bundles
 for **DKS** (dhnt's managed Kubernetes service; see the `cloudbox`
 component of the dhnt umbrella).
 
+**Live deployment**: <https://ai.dhnt.io/> — log in and browse
+**Cluster → App Store** to install any of the apps below into your
+per-user namespace with one click.
+
 ## Layout
 
 ```
