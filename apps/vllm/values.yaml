@@ -1,0 +1,24 @@
+model:
+  # Default to a small model that fits on most GPUs. Override with
+  # --set model.repo=meta-llama/Llama-3.1-8B-Instruct etc.
+  repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  tokenLimit: 2048
+service:
+  type: ClusterIP
+  port: 8000
+resources:
+  limits:
+    nvidia.com/gpu: 1
+    cpu: 4
+    memory: 16Gi
+  requests:
+    cpu: 1
+    memory: 4Gi
+  storage:
+    size: 20Gi
+nodeSelector: {}
+# Default-permissive; override to constrain to a specific GPU type.
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule

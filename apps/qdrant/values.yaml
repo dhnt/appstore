@@ -1,0 +1,19 @@
+replicaCount: 1
+persistence:
+  size: 5Gi
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+service:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 6333
+    - name: grpc
+      port: 6334
+metrics:
+  enabled: false

@@ -1,0 +1,25 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: vllm
+  name: vLLM
+  version: "0.6"
+  categories: [ai-agent, ml]
+  tags: [llm-serving, inference, gpu, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    High-throughput LLM inference engine — serve your own Llama,
+    Mistral, Qwen, or any HuggingFace transformer with PagedAttention.
+    Requires a GPU node.
+  homepage: https://github.com/vllm-project/vllm
+  featured: true
+spec:
+  chart:
+    repo: https://substratusai.github.io/helm
+    name: vllm
+    version: "0.4.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

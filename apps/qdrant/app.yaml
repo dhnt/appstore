@@ -1,0 +1,24 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: qdrant
+  name: Qdrant
+  version: "1.12"
+  categories: [ai-agent, database]
+  tags: [vector-db, rag, embeddings, agent-memory, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Open-source vector database — the agent-memory and RAG-embeddings
+    store of choice for self-hosted AI workloads.
+  homepage: https://qdrant.tech
+  featured: true
+spec:
+  chart:
+    repo: https://qdrant.github.io/qdrant-helm
+    name: qdrant
+    version: "1.13.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

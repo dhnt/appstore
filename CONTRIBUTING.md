@@ -15,6 +15,22 @@ For a new app under `apps/<id>/`:
       (no external href). Will be base64-embedded into the API.
 - [ ] `README.md` — operator-facing description. First paragraph
       shown in the catalog grid; full content shown on app detail.
+      Must include `## License` (one-line link to upstream license).
+- [ ] `test/e2e.sh` — install → smoke → uninstall against any cluster
+      with `kubectl`+`helm`+`curl`+`jq`. Exits 0 on pass. **Required
+      for any app that sets `metadata.featured: true`**; recommended
+      for all others.
+- [ ] `test/perf.sh` — drives the app's bottleneck and writes
+      `test/stats.json` (schema below). **Required for any app that
+      sets `metadata.featured: true`**.
+- [ ] README "## Tested performance" section — a small table of
+      headline metrics, with values matching `test/stats.json`.
+      Numbers may say _not yet measured_ until the first run is
+      published, but the section + reproduction command must exist.
+- [ ] README "## Reproducing these numbers" section — the exact
+      bash one-liner a user runs to re-execute `e2e.sh` + `perf.sh`.
+      No cloudbox-specific tooling — the test must run against any
+      cluster where the user can helm-install.
 
 ## `app.yaml` schema
 
@@ -53,6 +69,41 @@ Validation rules cloudbox enforces:
   is supported. Anything else fails the parser.
 - `spec.rbac.clusterScoped: true` requires reviewer approval. Apps
   needing CRDs typically belong in `builtin/` instead.
+
+## `test/stats.json` schema
+
+`test/perf.sh` writes one file: `test/stats.json`. The schema is
+small and deliberately uniform across apps so the catalog-level
+`STATS.md` table can render any of them.
+
+```json
+{
+  "app": "qdrant",
+  "chart": "qdrant/qdrant-1.13.0",
+  "test_commit": "<git sha of dhnt/appstore at the time the perf ran>",
+  "date": "2026-05-31",
+  "cluster": {
+    "kubelet": "v1.31.4+k3s1",
+    "node_capacity": "8/32Gi"
+  },
+  "config": { "<app-specific knobs that drove the bench>": "..." },
+  "results": { "<headline metric>": 12.3, "<secondary metric>": 4.5 }
+}
+```
+
+The `results` object's keys vary per app — pick the metrics that
+match the app's bottleneck (latency for query engines, throughput
+for queues, etc.). Document them in the app's README "Tested
+performance" table.
+
+Reproducibility rules:
+
+- Tests must work against any cluster (k3s, kind, EKS, DKS).
+  No cloudbox-specific dependencies.
+- Pin the chart version in the test to the same string as
+  `app.yaml`'s `spec.chart.version`. Drift here is a bug.
+- Random seeds (where used) must be fixed so two runs on
+  identical hardware return identical results.
 
 ## Builtin PR checklist
 

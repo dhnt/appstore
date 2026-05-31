@@ -1,0 +1,33 @@
+replicaCount: 1
+service:
+  type: ClusterIP
+  port: 3000
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+# LangFuse persists traces in PostgreSQL. The chart bundles a
+# postgres subchart by default — fine for solo / small-team
+# observability. Point at an external Postgres for production
+# (set postgresql.enabled=false + database.url=...).
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1
+        memory: 1Gi
+# NEXTAUTH_SECRET / SALT are generated on first install if not set.
+# Override at install time via the cloudbox values dialog if you want
+# pinned secrets across reinstalls.
+nextauth:
+  secret: ""
+  salt: ""

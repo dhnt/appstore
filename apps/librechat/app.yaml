@@ -1,0 +1,25 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: librechat
+  name: LibreChat
+  version: "0.7"
+  categories: [ai-agent, web]
+  tags: [chat-ui, openai-compatible, multi-provider, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Self-hosted polyglot LLM chat UI — connects to OpenAI, Anthropic,
+    Bedrock, Ollama, vLLM, LiteLLM, or any OpenAI-compatible endpoint.
+    Free of branding-preservation clauses; MIT licensed.
+  homepage: https://librechat.ai
+  featured: true
+spec:
+  chart:
+    repo: https://danny-avila.github.io/helm-charts
+    name: librechat
+    version: "0.4.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

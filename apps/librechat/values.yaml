@@ -1,0 +1,28 @@
+replicaCount: 1
+service:
+  type: ClusterIP
+  port: 3080
+persistence:
+  size: 2Gi
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+# Point at any OpenAI-compatible endpoint. Common defaults:
+#   - cloudbox's matrix-tunneled Ollama: http://OLLAMA_ENDPOINT/v1
+#   - in-cluster vLLM: http://vllm-<suffix>.user-<hash>.svc:8000/v1
+#   - in-cluster LiteLLM gateway: http://litellm-<suffix>.user-<hash>.svc:4000
+# Override at install time via --set or values overlay.
+env:
+  OPENAI_API_KEY: ""
+  OPENAI_REVERSE_PROXY: ""
+mongodb:
+  # LibreChat persists conversation history in MongoDB. The chart
+  # bundles a subchart by default — 1 replica is plenty for a
+  # single-user setup; bump if you share the install.
+  enabled: true
+  persistence:
+    size: 4Gi

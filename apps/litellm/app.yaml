@@ -1,0 +1,26 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: litellm
+  name: LiteLLM
+  version: "1.x"
+  categories: [ai-agent, gateway]
+  tags: [llm-gateway, openai-compatible, multi-provider, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Unified OpenAI-compatible gateway in front of 100+ LLM providers.
+    Issue one API key to your apps; route, fall back, rate-limit, log,
+    and cost-cap across OpenAI, Anthropic, Bedrock, Vertex, Ollama,
+    vLLM, and friends.
+  homepage: https://litellm.ai
+  featured: true
+spec:
+  chart:
+    repo: https://berriai.github.io/litellm-helm
+    name: litellm-helm
+    version: "0.2.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

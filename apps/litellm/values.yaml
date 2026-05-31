@@ -1,0 +1,23 @@
+replicaCount: 1
+service:
+  type: ClusterIP
+  port: 4000
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1
+    memory: 512Mi
+# Master key — the single key clients send. Override at install time
+# to something strong (32+ hex chars); leaving blank generates one.
+masterkey: ""
+# Provider config — at minimum one model needs an upstream key/route.
+# Override via the cloudbox values dialog; see ../README.md for
+# patterns (cloudbox outpost Ollama, in-cluster vLLM, etc.).
+proxy_config:
+  model_list: []
+# Postgres for budgeting + audit log. LiteLLM works without it (the
+# proxy is stateless on the hot path) — disable to save resources.
+db:
+  enabled: false

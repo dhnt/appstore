@@ -1,0 +1,25 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: langfuse
+  name: LangFuse
+  version: "2.x"
+  categories: [ai-agent, monitoring]
+  tags: [llm-observability, traces, evals, agents]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Open-source LLM observability. Capture every prompt + response +
+    cost + latency for any agent or chain; debug + evaluate calls in
+    a web UI. MIT-licensed OSS core; the bundled chart deploys the
+    OSS feature set only.
+  homepage: https://langfuse.com
+spec:
+  chart:
+    repo: https://langfuse.github.io/langfuse-k8s
+    name: langfuse
+    version: "0.13.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml
