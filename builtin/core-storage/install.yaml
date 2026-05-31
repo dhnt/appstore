@@ -2,8 +2,21 @@
 # cluster default, so PVCs without an explicit storageClassName bind
 # instead of staying Pending forever.
 #
+# *** PREREQUISITE: at least one outpost must be in k3s-agent mode ***
+#
 # k3s ships rancher/local-path-provisioner and registers a StorageClass
-# named "local-path" — but does NOT annotate it as the default class.
+# named "local-path" via its `local-storage` HelmChart addon — but the
+# addon's helm-install Job needs a real kubelet to schedule on. If the
+# cluster has ZERO real-kubelet nodes (all outposts in vkpodman mode),
+# the Job stays Pending, the StorageClass is never created, and this
+# bundle has nothing to patch. Symptom: `kubectl get sc local-path`
+# returns NotFound; new PVCs hang Pending forever.
+#
+# Verify before applying:
+#   kubectl get sc local-path                            # must exist
+#   kubectl -n kube-system get pod -l app=local-path-provisioner   # must be Running
+#   kubectl get nodes -o wide | grep -v virtual-kubelet  # must have ≥1 real node
+#
 # Helm charts (Argo CD HA Redis, Postgres/MariaDB/etcd, Grafana, every
 # `volumeClaimTemplates` consumer) assume a default SC exists. Without
 # this annotation those PVCs hang.
