@@ -25113,6 +25113,12 @@ metadata:
     app.kubernetes.io/part-of: argocd
   name: argocd-applicationset-controller
 spec:
+  # HA: 2 replicas + topologySpreadConstraints (the chart's default
+  # has no anti-affinity here, so we add the spread explicitly).
+  # applicationset-controller uses leader election internally —
+  # active-passive, only one pod processes ApplicationSets at a
+  # time but the standby is ready to take over within seconds.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: argocd-applicationset-controller
@@ -25121,6 +25127,13 @@ spec:
       labels:
         app.kubernetes.io/name: argocd-applicationset-controller
     spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: argocd-applicationset-controller
       containers:
       - args:
         - /usr/local/bin/argocd-applicationset-controller
@@ -25368,6 +25381,11 @@ metadata:
     app.kubernetes.io/part-of: argocd
   name: argocd-dex-server
 spec:
+  # HA: 2 replicas. Dex's anti-affinity is weight 5 (very soft),
+  # so two pods may land on the same node on bin-packed clusters;
+  # OAuth flow tolerates that — Dex is only used during the login
+  # callback, and one healthy replica anywhere keeps logins working.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: argocd-dex-server
@@ -25671,6 +25689,10 @@ metadata:
     app.kubernetes.io/part-of: argocd
   name: argocd-repo-server
 spec:
+  # HA: 2 replicas + the existing preferred podAntiAffinity
+  # (hostname topology, weight 100). Stateless — repo-server is a
+  # git-clone-and-render daemon, no shared state, scales horizontally.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: argocd-repo-server
@@ -26042,6 +26064,12 @@ metadata:
     app.kubernetes.io/part-of: argocd
   name: argocd-server
 spec:
+  # HA: 2 replicas + the existing preferred podAntiAffinity
+  # (hostname topology, weight 100, defined in template.spec below)
+  # keeps the UI/API serving across any single-node loss. Anti-
+  # affinity is preferred (not required), so single-node clusters
+  # still schedule both pods.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: argocd-server
@@ -26978,3 +27006,67 @@ spec:
       app.kubernetes.io/name: argocd-server
   policyTypes:
   - Ingress
+---
+# HA additions appended by dhnt: PodDisruptionBudgets that pair
+# with the `replicas: 2` bumps above. With maxUnavailable: 1, a
+# kubectl drain or a rolling node-upgrade can take at most 1
+# replica down at a time; the other keeps serving until its
+# replacement is Ready on a different node. Stateless components
+# only — application-controller (StatefulSet, sharding territory)
+# and redis (no Sentinel, lose state if killed) are deliberately
+# left at replicas: 1 here.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: argocd-server
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-server
+    app.kubernetes.io/part-of: argocd
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: argocd-repo-server
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-repo-server
+    app.kubernetes.io/part-of: argocd
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-repo-server
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: argocd-applicationset-controller
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-applicationset-controller
+    app.kubernetes.io/part-of: argocd
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-applicationset-controller
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: argocd-dex-server
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-dex-server
+    app.kubernetes.io/part-of: argocd
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-dex-server

@@ -8,7 +8,7 @@
 # Post-install Headlamp is reachable in-cluster at
 #   http://headlamp.headlamp.svc.cluster.local
 # and through cloudbox's existing service proxy at
-#   https://ai.dhnt.io/cluster/svc/headlamp/headlamp/
+#   https://ai.dhnt.io/matrix/cluster/svc/headlamp/headlamp/
 #
 # Two cloudbox-specific tunings via --set:
 #   1. config.baseURL — Headlamp's frontend assets resolve relative
@@ -74,27 +74,121 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: installer
-        image: alpine/helm:3.15.2
+        # alpine/k8s is the Alpine-maintained image that ships helm,
+        # kubectl, and kustomize together. The previous bundle used
+        # alpine/helm which has helm only — its final `kubectl label
+        # svc` line silently failed with "command not found" under
+        # `set -e`, exiting 1 after the (likely successful) helm install.
+        image: alpine/k8s:1.30.5
         command: ["/bin/sh", "-c"]
         args:
         - |
-          set -euo pipefail
+          # Log capture without set -e / trap-EXIT shenanigans.
+          # Redirect this shell's stdout+stderr into /tmp/install.log.
+          # Run each phase explicitly with `$?` capture. At the end,
+          # ALWAYS write the log into a ConfigMap (success or failure),
+          # then exit with the worst phase's rc.
+          # ConfigMap fetches don't need to traverse the slow
+          # apiserver→kubelet log proxy, so the operator can read the
+          # full helm output via /api/cluster/_admin/cm/headlamp/install-log.
+          LOG=/tmp/install.log
+          : > "$LOG"
+          exec >>"$LOG" 2>&1
+
           CHART_REF=0.42.0
-          echo "==> add Headlamp helm repo"
+          rc=0
+
+          echo "==> [step 1] helm repo add"
           helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+          step1=$?
+          [ $rc -eq 0 ] && rc=$step1
+
+          echo "==> [step 2] helm repo update"
           helm repo update
-          echo "==> helm install/upgrade headlamp"
+          step2=$?
+          [ $rc -eq 0 ] && rc=$step2
+
+          echo "==> [step 3] helm upgrade --install"
+          # replicaCount=2 + the topology-spread patch in step 4 below
+          # = headlamp keeps serving after any one node goes off. On a
+          # single-node cluster the second pod is co-tenant (the helm
+          # chart's default scheduler config doesn't reject it), so the
+          # bump is harmless for small deployments.
           helm upgrade --install headlamp headlamp/headlamp \
             --version ${CHART_REF} \
             --namespace headlamp \
-            --set config.baseURL=/cluster/svc/headlamp/headlamp \
+            --set config.baseURL=/matrix/cluster/svc/headlamp/headlamp \
             --set config.inCluster=true \
+            --set replicaCount=2 \
             --wait \
             --timeout 5m
-          echo "==> label the Service so cluster-svc-proxy injects the caller's SA token"
+          step3=$?
+          [ $rc -eq 0 ] && rc=$step3
+
+          echo "==> [step 4] kubectl label svc headlamp (inject-user-token)"
           kubectl label svc headlamp -n headlamp \
             cloudbox.dhnt.io/inject-user-token=true --overwrite
-          echo "==> Headlamp install complete"
+          step4=$?
+          [ $rc -eq 0 ] && rc=$step4
+
+          echo "==> [step 5] HA shape: topologySpreadConstraints + PDB"
+          # Helm chart 0.42.0 doesn't expose topologySpreadConstraints
+          # as a value, so we patch the Deployment directly. Same
+          # maxSkew/whenUnsatisfiable shape as the coredns bundle:
+          # one-per-node when possible, ScheduleAnyway on single-node
+          # clusters. labelSelector matches the chart's standard
+          # app.kubernetes.io/name label.
+          kubectl patch deployment headlamp -n headlamp --type=strategic --patch='
+          spec:
+            template:
+              spec:
+                topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: kubernetes.io/hostname
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: headlamp
+          '
+          step5=$?
+          [ $rc -eq 0 ] && rc=$step5
+
+          # PDB: maxUnavailable: 1 so kubectl drain / node-upgrade
+          # eviction can take at most one of the two replicas at a
+          # time. The other stays serving the UI to the operator
+          # running the drain.
+          echo "==> [step 6] PodDisruptionBudget"
+          kubectl apply -f - <<'EOF'
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: headlamp
+            namespace: headlamp
+            labels:
+              app.kubernetes.io/name: headlamp
+          spec:
+            maxUnavailable: 1
+            selector:
+              matchLabels:
+                app.kubernetes.io/name: headlamp
+          EOF
+          step6=$?
+          [ $rc -eq 0 ] && rc=$step6
+
+          echo "==> [final] step results: helm-add=$step1 helm-update=$step2 helm-install=$step3 kubectl-label=$step4 ha-patch=$step5 pdb=$step6 final_rc=$rc"
+
+          # Always publish the log to a ConfigMap, even on failure.
+          kubectl create cm install-log -n headlamp \
+            --from-file=install.log="$LOG" \
+            --dry-run=client -o yaml \
+            | kubectl apply -f - 1>>"$LOG" 2>>"$LOG"
+          # Re-publish so the ConfigMap reflects this final line too.
+          kubectl create cm install-log -n headlamp \
+            --from-file=install.log="$LOG" \
+            --dry-run=client -o yaml \
+            | kubectl apply -f - 1>>"$LOG" 2>>"$LOG"
+
+          exit $rc
         resources:
           requests:
             cpu: 100m

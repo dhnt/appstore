@@ -1,0 +1,251 @@
+# CoreDNS — cluster DNS resolver.
+#
+# k3s normally writes this manifest to <DataDir>/server/manifests/ at
+# startup and the in-process wrangler applies it. In our App Platform
+# deploy, that directory creation fails (logs show recurring
+# "Failed to process config: lstat .../k3s/server/manifests: no such
+# file or directory") so the built-in addon never lands. Without
+# CoreDNS no in-cluster pod can resolve external hostnames or even
+# kubernetes.default.svc — helm install, kubectl talking to apiserver
+# from a pod, headlamp talking to apiserver, etc. all break.
+#
+# This bundle ships the same Deployment+Service+ConfigMap+RBAC k3s
+# would have applied (CoreDNS v1.12.1 — matches k3s 1.36's pin) so we
+# don't have to wait on the k3s addon path.
+#
+# Auto-applied at cluster boot via CLUSTER_AUTO_APPLY_BUNDLES.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:coredns
+rules:
+- apiGroups: [""]
+  resources: ["endpoints", "services", "pods", "namespaces"]
+  verbs: ["list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get"]
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:coredns
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:coredns
+subjects:
+- kind: ServiceAccount
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+            lameduck 5s
+        }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+            ttl 30
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf {
+            max_concurrent 1000
+        }
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+  NodeHosts: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns
+  namespace: kube-system
+  labels:
+    k8s-app: kube-dns
+    kubernetes.io/name: "CoreDNS"
+spec:
+  # 2 replicas + hostname-topology spread = surviving the loss of any
+  # one node leaves at least one CoreDNS pod serving. Single-node
+  # clusters still work (whenUnsatisfiable: ScheduleAnyway puts both
+  # on the one node).
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Allow at most 1 of the 2 pods to be down at a time so a rolling
+      # update can never take cluster DNS to zero. maxSurge: 1 lets a
+      # third pod come up before the old one terminates.
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+  template:
+    metadata:
+      labels:
+        k8s-app: kube-dns
+    spec:
+      priorityClassName: "system-cluster-critical"
+      serviceAccountName: coredns
+      # Topology spread: one CoreDNS pod per node when possible; fall
+      # back to co-tenancy on single-node clusters (ScheduleAnyway).
+      # maxSkew: 1 means the scheduler picks the least-loaded node for
+      # each new replica without forcing failure if no spread is
+      # possible.
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      # Belt-and-suspenders: preferred (not required) pod anti-affinity
+      # also discourages cohabitation. Redundant with topology spread
+      # on multi-node clusters but free to keep.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  k8s-app: kube-dns
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: "CriticalAddonsOnly"
+        operator: "Exists"
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+      - name: coredns
+        image: rancher/mirrored-coredns-coredns:1.12.1
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            memory: 170Mi
+          requests:
+            cpu: 100m
+            memory: 70Mi
+        args: [ "-conf", "/etc/coredns/Corefile" ]
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/coredns
+          readOnly: true
+        ports:
+        - containerPort: 53
+          name: dns
+          protocol: UDP
+        - containerPort: 53
+          name: dns-tcp
+          protocol: TCP
+        - containerPort: 9153
+          name: metrics
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+            - all
+          readOnlyRootFilesystem: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8181
+            scheme: HTTP
+      dnsPolicy: Default
+      volumes:
+      - name: config-volume
+        configMap:
+          name: coredns
+          items:
+          - key: Corefile
+            path: Corefile
+          - key: NodeHosts
+            path: NodeHosts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-dns
+  namespace: kube-system
+  annotations:
+    prometheus.io/port: "9153"
+    prometheus.io/scrape: "true"
+  labels:
+    k8s-app: kube-dns
+    kubernetes.io/cluster-service: "true"
+    kubernetes.io/name: "CoreDNS"
+spec:
+  clusterIP: 10.43.0.10
+  selector:
+    k8s-app: kube-dns
+  ports:
+  - name: dns
+    port: 53
+    protocol: UDP
+  - name: dns-tcp
+    port: 53
+    protocol: TCP
+  - name: metrics
+    port: 9153
+    protocol: TCP
+---
+# PodDisruptionBudget — guarantees at least 1 CoreDNS pod stays up
+# during voluntary disruptions (kubectl drain, eviction during a
+# rolling node-upgrade). With replicas: 2 + maxUnavailable: 1, a
+# drain on one node waits until the second replica is Ready on a
+# different node before letting the first one terminate. Cluster
+# DNS never goes to zero during planned maintenance.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coredns
+  namespace: kube-system
+  labels:
+    k8s-app: kube-dns
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
