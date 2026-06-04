@@ -24843,12 +24843,12 @@ metadata:
   name: argocd-cmd-params-cm
 data:
   # cloudbox-specific: serve Argo CD UI under the generic
-  # /cluster/svc/<ns>/<svc>/* reverse-proxy. server.insecure makes
+  # /matrix/cluster/svc/<ns>/<svc>/* reverse-proxy. server.insecure makes
   # argocd-server speak plain HTTP on its container port (8080) so
   # the apiserver's services-proxy doesn't have to deal with the
   # self-signed cert on its own loopback dial.
   # basehref WITHOUT rootpath: argocd frontend's React Router uses basehref
-  # to match routes (so /cluster/svc/argocd/argocd-server/applications matches
+  # to match routes (so /matrix/cluster/svc/argocd/argocd-server/applications matches
   # the apps view), and asset URLs in HTML get the prefix via <base href> so
   # the browser fetches them at the external cloudbox URL. argocd backend,
   # with rootpath unset, still serves at unprefixed paths (/api/version,
@@ -24857,13 +24857,13 @@ data:
   # Path-form basehref. argocd silently drops absolute URLs from this
   # field, so we use the path. The apiserver's HTML rewriter prefixes
   # its own services-proxy URL only when there's no <base> tag in the
-  # response; with argocd's own <base href="/cluster/svc/argocd/argocd-server/">
+  # response; with argocd's own <base href="/matrix/cluster/svc/argocd/argocd-server/">
   # injected, the apiserver leaves it alone — and the browser resolves
   # asset URLs relative to that.
-  server.basehref: "/cluster/svc/argocd/argocd-server/"
+  server.basehref: "/matrix/cluster/svc/argocd/argocd-server/"
   server.insecure: "true"
   # Single-tenant cloudbox: the OAuth user IS the cluster owner.
-  # Cloudbox's session cookie (checked at the /cluster/svc/* proxy)
+  # Cloudbox's session cookie (checked at the /matrix/cluster/svc/* proxy)
   # is the only access gate, so argocd's own login screen would be
   # a redundant second prompt for the same human. Bypass it; every
   # request reaching argocd-server is treated as the admin user.
@@ -26097,9 +26097,9 @@ spec:
       - args:
         - /usr/local/bin/argocd-server
         - --basehref
-        - /cluster/svc/argocd/argocd-server/
+        - /matrix/cluster/svc/argocd/argocd-server/
         - --rootpath
-        - /cluster/svc/argocd/argocd-server/
+        - /matrix/cluster/svc/argocd/argocd-server/
         - --insecure
         - --disable-auth
         env:
