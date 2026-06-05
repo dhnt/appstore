@@ -18,20 +18,16 @@ metadata:
     UI runs in DKS.
   homepage: https://github.com/qiangli/kg
 spec:
-  # NOTE: the chart pointer below references a Helm repo URL that
-  # is NOT YET PUBLISHED. The chart sources live in the kg repo at
-  # `deploy/charts/kg-ui/` and are packaged via `make
-  # chart-kg-ui-package`. Publishing to a real Helm repo (GitHub
-  # Pages on a kg-charts repo, or OCI on ghcr.io once cloudbox
-  # accepts oci:// chart names) is the wiring step that turns this
-  # appstore entry into a one-click install. Until then, install
-  # manually:
+  # Chart is published to qiangli/kg-charts and served via GitHub
+  # Pages with the user's account-wide custom domain. The github.io
+  # URL (https://qiangli.github.io/kg-charts) 301s to qiang.li, so
+  # we point at the canonical apex domain directly to avoid the
+  # extra redirect penalty on every install.
   #
-  #   helm install kg-ui ./deploy/charts/kg-ui -n <ns> \
-  #     --set daemon.url=https://ai.dhnt.io/matrix/h/<host>/app/kg
-  #
+  # Chart sources: github.com/qiangli/kg → deploy/charts/kg-ui/
+  # Publish recipe: github.com/qiangli/kg-charts → README.md
   chart:
-    repo: https://qiangli.github.io/kg-charts
+    repo: https://qiang.li/kg-charts
     name: kg-ui
     version: "0.1.0"
   targetNamespace: "{{.UserNamespace}}"
