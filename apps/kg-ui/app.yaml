@@ -1,0 +1,40 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: kg-ui
+  name: kg Monitor & Explorer
+  version: "0.1"
+  categories: [ai-agent, dev-tools]
+  tags: [kg, knowledge-graph, dhnt, personal-knowledge-graph, mcp]
+  maintainers:
+    - email: liqiang@gmail.com
+  description: >
+    Monitor + explorer SPA for a running kg daemon. The kg daemon
+    walks the user's filesystem and emits a knowledge graph;
+    kg-ui surfaces ingestion telemetry, the live event log, the
+    queue inspector, and an explorer for the resulting graph.
+    Pairs with a host-running `kg daemon` reached through cloudbox
+    + outpost — the daemon stays where the filesystem lives, the
+    UI runs in DKS.
+  homepage: https://github.com/qiangli/kg
+spec:
+  # NOTE: the chart pointer below references a Helm repo URL that
+  # is NOT YET PUBLISHED. The chart sources live in the kg repo at
+  # `deploy/charts/kg-ui/` and are packaged via `make
+  # chart-kg-ui-package`. Publishing to a real Helm repo (GitHub
+  # Pages on a kg-charts repo, or OCI on ghcr.io once cloudbox
+  # accepts oci:// chart names) is the wiring step that turns this
+  # appstore entry into a one-click install. Until then, install
+  # manually:
+  #
+  #   helm install kg-ui ./deploy/charts/kg-ui -n <ns> \
+  #     --set daemon.url=https://ai.dhnt.io/matrix/h/<host>/app/kg
+  #
+  chart:
+    repo: https://qiangli.github.io/kg-charts
+    name: kg-ui
+    version: "0.1.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

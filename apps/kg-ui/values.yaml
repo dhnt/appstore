@@ -1,0 +1,39 @@
+# Default Helm values for kg-ui as installed from this catalog
+# entry. Mirrors deploy/charts/kg-ui/values.yaml in the kg repo
+# with the cloudbox-installer conventions applied: cluster the user
+# reaches through cloudbox's proxy doesn't need its own ingress.
+#
+# daemon.url is the critical knob — see the chart's values.yaml
+# for the recipe. The cloudbox installer expands
+# {{.UserHost}} / {{.UserEmail}} only in app.yaml itself, not in
+# this values blob (helm.go just passes the YAML straight to helm),
+# so the operator picks the URL at install time via the SPA's
+# values override field.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/qiangli/kg-ui
+  tag: ""
+  pullPolicy: IfNotPresent
+
+daemon:
+  # Set per-install. Typical T6 shape:
+  #   https://ai.dhnt.io/matrix/h/<host>/app/kg
+  # for a paired outpost that declares `app: kg` in agent.json.
+  url: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
