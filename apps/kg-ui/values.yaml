@@ -18,8 +18,8 @@ image:
   pullPolicy: IfNotPresent
 
 daemon:
-  # Set per-install. Typical T6 shape:
-  #   https://ai.dhnt.io/matrix/h/<host>/app/kg
+  # Set per-install. Typical split-deployment shape:
+  #   https://<your-cloudbox>/matrix/h/<host>/app/kg
   # for a paired outpost that declares `app: kg` in agent.json.
   url: ""
 

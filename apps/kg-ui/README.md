@@ -24,10 +24,9 @@ fetched from the embedded bundle, or a proxied `/api/*` /
 
 ## How it fits with cloudbox + outpost
 
-kg-ui is the T6 acceptance test from the dhnt three-pillar plan:
-
-> kg / kg-ui split deployment — host-bound worker scans/parses the
-> user's filesystem, DKS-pod UI talks back via cloudbox/outpost.
+kg-ui follows the split-deployment shape: a host-bound worker
+scans and parses the user's filesystem, while a DKS-pod UI talks
+back to that worker through cloudbox + outpost.
 
 The `kg daemon` MUST run on the host where the filesystem it scans
 lives — that's by design, the personal-KG point. When `kg-ui` is
@@ -57,7 +56,7 @@ reach anything from inside the pod.
 
 ```
 daemon:
-  url: https://ai.dhnt.io/matrix/h/dragon/app/kg
+  url: https://<your-cloudbox>/matrix/h/<host>/app/kg
 ```
 
 Other knobs (resources, replicas, ingress) match the chart's
