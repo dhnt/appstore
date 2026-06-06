@@ -8,6 +8,13 @@ metadata:
   tags: [kg, knowledge-graph, dhnt, personal-knowledge-graph, mcp]
   maintainers:
     - email: liqiang@gmail.com
+  # Closed source (image at ghcr.io/qiangli/kg-ui is the only
+  # distributed artefact; the Go source for the UI is not public),
+  # but installable by any cloudbox-authenticated user — the auth
+  # gate is "did you sign in to cloudbox", not "do you belong to a
+  # specific allowlist." visibility=public is the right tier for
+  # that shape and matches the appstore default.
+  visibility: public
   description: >
     Monitor + explorer SPA for a running kg daemon. The kg daemon
     walks the user's filesystem and emits a knowledge graph;

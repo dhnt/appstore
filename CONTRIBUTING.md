@@ -49,6 +49,9 @@ metadata:
     Single-line summary shown in the catalog grid.
   homepage: https://postgresql.org
   featured: false             # true → SPA renders this app in the Featured row at the top
+  visibility: public          # public (default) | members | private — gates who can install
+  members:                    # consulted ONLY when visibility=members
+    - alice@example.com       # comma-list of emails; maintainers are always allowed
 spec:
   chart:
     repo: https://charts.bitnami.com/bitnami
@@ -69,6 +72,20 @@ Validation rules cloudbox enforces:
   is supported. Anything else fails the parser.
 - `spec.rbac.clusterScoped: true` requires reviewer approval. Apps
   needing CRDs typically belong in `builtin/` instead.
+- `metadata.visibility` ∈ `{public, members, private}` (omit to
+  default to `public`). Tiers:
+  - `public` — any cloudbox-authenticated user can install. Most
+    catalog entries are this.
+  - `members` — only `metadata.maintainers` OR addresses in
+    `metadata.members` can install. The catalog still LISTS the
+    entry to non-members (so they can request access from the
+    maintainer); the install handler 403s with a "members-only"
+    message.
+  - `private` — only `metadata.maintainers` can install AND only
+    they see the entry in the catalog at all. A direct lookup of
+    the appid by anyone else returns 404 (so existence isn't
+    confirmed). Use this for the closed-source-app-for-yourself
+    pattern.
 
 ## `test/stats.json` schema
 
