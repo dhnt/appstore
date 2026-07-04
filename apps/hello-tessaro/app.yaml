@@ -1,0 +1,34 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: hello-tessaro
+  name: Hello Tessaro
+  version: "0.1"
+  categories: [dev-tools, example]
+  tags: [reference, cooperative-app, template, dhnt]
+  maintainers:
+    - name: dhnt
+      email: liqiang@gmail.com
+  visibility: public
+  description: >
+    Reference "custom app on tessaro" — a minimal cooperative web app
+    demonstrating the full contract (local-only + web/cloud access,
+    admin/regular users, /healthz + /version), deployable as a DKS pod.
+    The same binary runs bare-metal, in podman, or here as a pod — the
+    deployment-mode contract. Source + Helm chart + GitOps ApplicationSet:
+    github.com/qiangli/outpost/tree/main/examples/hello-tessaro.
+  homepage: https://github.com/qiangli/outpost/tree/main/examples/hello-tessaro
+spec:
+  # NOTE: the chart source lives in-repo at examples/hello-tessaro/chart/.
+  # The one-click install path needs it published to a Helm repo (see
+  # appstore/apps/hello-tessaro/README.md); until then the working path is the
+  # GitOps ApplicationSet at examples/hello-tessaro/gitops/. The pointer below is
+  # the intended published location.
+  chart:
+    repo: https://qiang.li/hello-tessaro-charts
+    name: hello-tessaro
+    version: "0.1.0"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml
