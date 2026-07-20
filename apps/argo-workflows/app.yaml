@@ -1,0 +1,33 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: argo-workflows
+  name: Argo Workflows
+  version: "1.0"
+  categories: [ci-cd, orchestration, developer-tools]
+  tags: [workflow, dag, kubernetes, ci, popular]
+  maintainers:
+    - email: ops@dhnt.io
+  description: >
+    Container-native workflow engine for Kubernetes — run a DAG of steps as pods,
+    with automatic retry and node-failure rescheduling. This is the tier-5 (DKS)
+    executor for `bashy dag`: the `dag -> Argo` emitter lowers a chunked workflow
+    to an Argo Workflow, and k8s reschedules pods off dead/drained nodes while
+    Argo's retryStrategy(OnError) retries infrastructure failures WITHOUT retrying
+    a container's test result — the "retry infra, keep results" contract, native.
+  homepage: https://github.com/argoproj/argo-workflows
+  featured: false
+spec:
+  chart:
+    repo: https://argoproj.github.io/argo-helm
+    name: argo-workflows
+    version: "1.0.20"   # argo v4.0.7 — Apache-2.0
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    # namespaced controller (singleNamespace) — watches Workflows only in its own
+    # namespace, so no cluster-scoped RBAC is granted.
+    clusterScoped: false
+  defaultValuesFile: values.yaml
+service:
+  type: ClusterIP
+  port: 2746

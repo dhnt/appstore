@@ -1,0 +1,30 @@
+# Argo Workflows — minimal DKS defaults. Namespaced install: the controller
+# watches Workflows only in its own namespace, so it needs no cluster-scoped RBAC
+# and stays a good multi-tenant citizen. Front the server through cloudbox/outpost
+# rather than exposing it raw. Bump chart pin in app.yaml on upstream releases.
+singleNamespace: true
+
+crds:
+  install: true
+  keep: true
+
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+server:
+  enabled: true
+  # internal use; access is fronted by the cloudbox/outpost reverse proxy.
+  authModes: [server]
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+# emissary executor (chart default) — no privileged container required.
+workflow:
+  serviceAccount:
+    create: true
+    name: argo-workflow
+  rbac:
+    create: true
