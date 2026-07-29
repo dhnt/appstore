@@ -284,6 +284,11 @@ if smoke_path.exists():
     for defaulted in ("target-os", "target-arch"):
         ck(params.get(defaulted, {}).get("value"),
            f"smoke: parameter {defaulted!r} must be declared with an explicit default")
+    deadline_param = params.get("job-active-deadline-seconds") or {}
+    deadline_default = deadline_param.get("value")
+    ck(isinstance(deadline_default, (str, int))
+       and re.fullmatch(r"[1-9]\d*", str(deadline_default)) is not None,
+       "smoke: parameter 'job-active-deadline-seconds' must have a positive integer default")
 
     # --- 6d. The Job manifest: exactly the vk-native envelope ---
     manifest_raw = res.get("manifest") or ""
@@ -293,7 +298,14 @@ if smoke_path.exists():
     ck(not re.search(r"image:\s*[\"']?[\w./-]+:[\w.-]+[\"']?\s*$", manifest_raw, re.M),
        "smoke: no literal tagged image may appear — submit-time values must be digest-pinned")
 
+    deadline_expr = "{{workflow.parameters.job-active-deadline-seconds}}"
+    ck(re.search(r"^\s*activeDeadlineSeconds:\s*"
+                 + re.escape(deadline_expr) + r"\s*$", manifest_raw, re.M) is not None,
+       "smoke: Job spec.activeDeadlineSeconds must use the unquoted "
+       "job-active-deadline-seconds parameter so Kubernetes receives an integer")
+
     subbed = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
+    subbed = subbed.replace(deadline_expr, str(deadline_default or "INVALID"))
     subbed = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", subbed)
     try:
         job = yaml.safe_load(subbed)

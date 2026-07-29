@@ -110,11 +110,12 @@ volume), no init containers, no sidecars, no volumes, no `envFrom`.
 
 | Rule | Where | Why |
 |---|---|---|
-| hard `nodeSelector` on both sides | workflow `spec` + Job pod | the scheduler cannot place the pod elsewhere; it stays Pending and the workflow fails |
+| hard `nodeSelector` on both sides | workflow `spec` + Job pod | the scheduler cannot place the pod elsewhere |
 | `tolerations: []` on the workflow | workflow `spec` | nothing readmits vk-native for Argo pods |
 | no `affinity` / `preferred…` anywhere | both | a soft rule *is* a fallback |
 | `backoffLimit: 0`, `restartPolicy: Never` | Job | no fallback in the time dimension either |
-| explicit `failureCondition` | resource template | an unschedulable Job fails the workflow; it cannot pass by omission |
+| positive `activeDeadlineSeconds` | Job | a Pending, unschedulable Job reaches terminal failure |
+| explicit `failureCondition` | resource template | Argo observes the Job failure; it cannot pass by omission |
 | `pods/log`, `pods/exec` not granted | `smoke/rbac.yaml` | granting them would imply a capability vk-native does not have |
 
 `test/static.sh` asserts every row of that table.
@@ -127,7 +128,8 @@ kubectl -n <ns> apply -f smoke/vk-native-indirection.yaml
 argo -n <ns> submit --from workflowtemplate/vk-native-indirection-smoke \
   -p job-image='ghcr.io/example/payload@sha256:<64 hex>' \
   -p job-command='["/bin/true"]' \
-  -p target-os=linux -p target-arch=arm64 --wait
+  -p target-os=linux -p target-arch=arm64 \
+  -p job-active-deadline-seconds=600 --wait
 ```
 
 `job-image` and `job-command` are **required parameters with no defaults**, on
@@ -145,6 +147,16 @@ purpose:
 
 The virtual-kubelet taint key is the `vk-taint-key` parameter (default
 `virtual-kubelet.io/provider`); override it if your fleet taints differently.
+
+The Job also has a native scheduler boundary:
+`job-active-deadline-seconds` defaults to **300 seconds**. If no matching
+vk-native node can schedule the payload, Kubernetes keeps the pod Pending until
+this positive deadline expires, marks the Job failed, and the Argo resource
+template observes that terminal failure through its existing
+`failureCondition`. Override it at submission with
+`-p job-active-deadline-seconds=<positive-seconds>` to match fleet scheduling
+latency. This is additional to, and does not replace, the workflow/task timeout
+semantics enforced by Argo.
 
 ## Install
 

@@ -78,6 +78,11 @@ spec:
       # Taint key the native nodes carry. Overridable per fleet.
       - name: vk-taint-key
         value: virtual-kubelet.io/provider
+      # Native scheduler boundary. If no matching vk-native node can run the
+      # payload, the Job controller marks the Job failed after this many
+      # seconds so Argo's resource watch observes a terminal condition.
+      - name: job-active-deadline-seconds
+        value: "300"
 
   templates:
     - name: indirection
@@ -95,8 +100,8 @@ spec:
         setOwnerReference: true
         # "Watch" == the resource template polls this Job's status until one
         # of these conditions holds. Success and failure are BOTH explicit, so
-        # a Job that can never be scheduled fails the workflow by timeout
-        # rather than passing by omission.
+        # a Job that can never be scheduled is failed by its native active
+        # deadline and the workflow fails rather than passing by omission.
         successCondition: status.succeeded > 0
         failureCondition: status.failed > 0
         manifest: |
@@ -111,6 +116,9 @@ spec:
             # No fallback in time: one attempt, no rescheduling onto another
             # node after a failure.
             backoffLimit: 0
+            # Intentionally unquoted: Argo substitutes the workflow parameter
+            # into this embedded manifest as a Kubernetes integer.
+            activeDeadlineSeconds: {{workflow.parameters.job-active-deadline-seconds}}
             completions: 1
             parallelism: 1
             template:
