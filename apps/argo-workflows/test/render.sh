@@ -218,6 +218,10 @@ if cms:
        "workflowDefaults.spec.tolerations must render as an explicit empty list")
     ck(spec.get("serviceAccountName") == "argo-workflow",
        "workflowDefaults.spec.serviceAccountName must pin the workflow ServiceAccount")
+    retry_limit = (spec.get("retryStrategy") or {}).get("limit")
+    ck(isinstance(retry_limit, int) and retry_limit == 2,
+       f"workflowDefaults.spec.retryStrategy.limit must render as integer 2, "
+       f"got {retry_limit!r} ({type(retry_limit).__name__})")
 
 # --- the package's default chart configuration must not target vk-native ----
 ck("vk-native" not in default_text,

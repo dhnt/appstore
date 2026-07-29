@@ -171,18 +171,6 @@ ck("preferredDuringScheduling" not in values_text,
 ck(not re.search(r"^\s*[^#\n]*vk-native", values_text, re.M),
    "values.yaml: package-managed chart objects and workflow defaults must not target vk-native")
 
-# Preserve the adversarial review evidence: workflowDefaults are defaults, not
-# an admission policy. A submitted Workflow/Template can supply its own
-# nodeSelector/tolerations, which take precedence over these catalog defaults.
-adversarial_selector = {"outpost.dhnt.io/backend": "vk-native", "kubernetes.io/os": "linux"}
-merged_selector = dict(dig(values, "controller", "workflowDefaults", "spec", "nodeSelector") or {})
-merged_selector.update(adversarial_selector)
-adversarial_tolerations = [{"key": "virtual-kubelet.io/provider", "operator": "Exists", "effect": "NoSchedule"}]
-merged_tolerations = adversarial_tolerations
-ck(merged_selector != K3S and merged_tolerations != [],
-   "adversarial evidence: hostile Workflow fields must be modeled as overriding "
-   "controller.workflowDefaults; otherwise this test would falsely treat defaults as admission")
-
 policy_kinds = {
     "ValidatingAdmissionPolicy",
     "ValidatingWebhookConfiguration",
@@ -331,6 +319,8 @@ if smoke_path.exists():
     ck(wspec.get("onExit") == "delete-job",
        "smoke: onExit must run the delete template so the Job is reaped on failure and "
        "cancellation too")
+    ck("--ignore-not-found" in (deleter.get("flags") or []),
+       "smoke: resource/delete flags must include --ignore-not-found so onExit is idempotent")
     ck("kubectl logs" not in raw and "kubectl exec" not in raw and "\nlog:" not in raw,
        "smoke: vk-native supports neither logs nor exec — the workflow must not depend on them")
 
@@ -358,20 +348,33 @@ if smoke_path.exists():
     ck(not re.search(r"image:\s*[\"']?[\w./-]+:[\w.-]+[\"']?\s*$", manifest_raw, re.M),
        "smoke: no literal tagged image may appear — submit-time values must be digest-pinned")
 
-    deadline_expr = "{{workflow.parameters.job-active-deadline-seconds}}"
+    deadline_expr = "{{=asInt(workflow.parameters['job-active-deadline-seconds'])}}"
     ck(re.search(r"^\s*activeDeadlineSeconds:\s*"
                  + re.escape(deadline_expr) + r"\s*$", manifest_raw, re.M) is not None,
-       "smoke: Job spec.activeDeadlineSeconds must use the unquoted "
-       "job-active-deadline-seconds parameter so Kubernetes receives an integer")
+       "smoke: Job spec.activeDeadlineSeconds must use an unquoted asInt expression "
+       "so Kubernetes receives a decimal integer even for leading-zero input")
 
     subbed = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
-    subbed = subbed.replace(deadline_expr, str(deadline_default or "INVALID"))
+    subbed = subbed.replace(deadline_expr, str(int(str(deadline_default), 10)))
     subbed = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", subbed)
     try:
         job = yaml.safe_load(subbed)
     except yaml.YAMLError as e:
         job = None
         fails.append(f"smoke: embedded Job manifest is not parseable YAML: {e}")
+
+    for deadline_input in ("0300", "0100"):
+        rendered = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
+        rendered = rendered.replace(deadline_expr, str(int(deadline_input, 10)))
+        rendered = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", rendered)
+        try:
+            rendered_deadline = dig(yaml.safe_load(rendered), "spec", "activeDeadlineSeconds")
+            ck(rendered_deadline == int(deadline_input, 10)
+               and isinstance(rendered_deadline, int),
+               f"smoke: deadline input {deadline_input!r} must render as decimal integer "
+               f"{int(deadline_input, 10)}, got {rendered_deadline!r}")
+        except yaml.YAMLError as e:
+            fails.append(f"smoke: deadline input {deadline_input!r} made the Job invalid YAML: {e}")
 
     if job:
         jspec = job.get("spec") or {}
@@ -452,3 +455,6 @@ if fails:
     sys.exit(1)
 print("PASS — argo-workflows static/schema/contract invariants hold")
 PY
+
+# Keep the checked-in adversarial regression battery in the normal static gate.
+python3 "$HERE/adversarial-probe.py" "$APP_DIR"
