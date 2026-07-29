@@ -1,30 +1,179 @@
-# Argo Workflows — minimal DKS defaults. Namespaced install: the controller
-# watches Workflows only in its own namespace, so it needs no cluster-scoped RBAC
-# and stays a good multi-tenant citizen. Front the server through cloudbox/outpost
-# rather than exposing it raw. Bump chart pin in app.yaml on upstream releases.
+# Argo Workflows — DKS defaults for the dhnt appstore.
+#
+# Design rules encoded below (see README.md for the long form):
+#
+#   1. Namespaced watch. `singleNamespace: true` keeps the controller reading
+#      Workflows only in its own namespace. (CRDs are still cluster-scoped —
+#      app.yaml declares `clusterScoped: true` honestly.)
+#   2. The chart's controller and server pods have explicit HARD selectors for
+#      real k3s agent nodes. The checked-in smoke WorkflowTemplate carries the
+#      same explicit selector for its own executor/init/wait pods. The
+#      workflowDefaults below are defense in depth for normal submissions, not
+#      admission enforcement: a submitted Workflow can override them.
+#   3. No credentials live here. The workflow archive and the S3-compatible
+#      artifact repository are wired with Secret *references* only; the
+#      Secrets themselves are created out-of-band (sealed-secrets / ESO /
+#      `kubectl create secret`) and are never committed to this repo.
+#   4. The server is internal. Front it with the cloudbox/outpost reverse
+#      proxy; do not expose 2746 directly.
+#
+# Bump `spec.chart.version` in app.yaml and the pin in test/render.sh in the
+# same commit — test/static.sh fails closed on drift.
+
+# ---------------------------------------------------------------------------
+# Scope
+# ---------------------------------------------------------------------------
+
+# Controller + server watch only their own namespace.
 singleNamespace: true
 
+# CRDs. `keep: true` means a `helm uninstall` does NOT delete the CRDs (and
+# therefore does not cascade-delete every Workflow object on the cluster).
+# Flip `install` to false for the admin-preinstalled-CRDs mode; see README.
 crds:
   install: true
   keep: true
 
+# Do not extend the built-in view/edit/admin ClusterRoles with Argo verbs.
+# Aggregated roles are a cluster-wide side effect that a per-user app install
+# has no business creating.
+createAggregateRoles: false
+
+# ---------------------------------------------------------------------------
+# Workflow controller
+# ---------------------------------------------------------------------------
 controller:
+  serviceAccount:
+    create: true
+    name: argo-workflows-controller
+
+  # Hard placement: real k3s agent nodes only.
+  nodeSelector:
+    outpost.dhnt.io/backend: k3s
+    kubernetes.io/os: linux
+  # Explicitly empty. Adding a virtual-kubelet toleration here would let the
+  # controller be scheduled onto a vk-native node, where it cannot run.
+  tolerations: []
+
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
 
+  # Defense-in-depth defaults for normally submitted Workflows. They supply
+  # k3s placement when a Workflow omits it, but Workflow fields are
+  # overrideable: this is not an admission policy and does not hard-pin a
+  # hostile submission. Third-party multi-tenant installs that require
+  # enforcement against hostile submissions must add an external admission
+  # policy.
+  workflowDefaults:
+    spec:
+      serviceAccountName: argo-workflow
+      nodeSelector:
+        outpost.dhnt.io/backend: k3s
+        kubernetes.io/os: linux
+      tolerations: []
+      # "retry infra, keep results": OnError retries pod-level/system failures
+      # (evicted, node lost, OOM-kill) and never retries a non-zero exit from
+      # the user's container.
+      retryStrategy:
+        limit: "2"
+        retryPolicy: OnError
+      podGC:
+        strategy: OnWorkflowSuccess
+      ttlStrategy:
+        secondsAfterCompletion: 86400
+        secondsAfterSuccess: 3600
+
+  # ---- Workflow archive (OFF by default) --------------------------------
+  # Enabling it needs an external PostgreSQL and a Secret holding its
+  # credentials. Create the Secret first, e.g.
+  #
+  #   kubectl -n <ns> create secret generic argo-archive-postgres \
+  #     --from-literal=username=argo --from-literal=password=<pw>
+  #
+  # then install with the block below uncommented (or use
+  # test/fixtures/enabled.values.yaml as a starting overlay).
+  #
+  # persistence:
+  #   archive: true
+  #   archiveTTL: 30d
+  #   postgresql:
+  #     host: postgres.<ns>.svc.cluster.local
+  #     port: 5432
+  #     database: argo
+  #     tableName: argo_workflows
+  #     userNameSecret:
+  #       name: argo-archive-postgres
+  #       key: username
+  #     passwordSecret:
+  #       name: argo-archive-postgres
+  #       key: password
+
+# ---------------------------------------------------------------------------
+# Argo Server (UI + API)
+# ---------------------------------------------------------------------------
 server:
   enabled: true
-  # internal use; access is fronted by the cloudbox/outpost reverse proxy.
+  # `server` auth mode = the server acts with its own ServiceAccount. Access
+  # control is the cloudbox/outpost proxy's job; do not publish this Service.
   authModes: [server]
+
+  serviceAccount:
+    create: true
+    name: argo-workflows-server
+
+  serviceType: ClusterIP
+
+  ingress:
+    enabled: false
+
+  nodeSelector:
+    outpost.dhnt.io/backend: k3s
+    kubernetes.io/os: linux
+  tolerations: []
+
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }
 
-# emissary executor (chart default) — no privileged container required.
+# ---------------------------------------------------------------------------
+# ServiceAccount + RBAC that submitted Workflows run as
+# ---------------------------------------------------------------------------
+# The chart creates `argo-workflow` plus the Role/RoleBinding letting it report
+# step results (workflowtaskresults). Anything a workflow needs BEYOND that —
+# e.g. creating batch/v1 Jobs, as the vk-native indirection smoke does — is an
+# explicit, separate grant: see smoke/rbac.yaml.
 workflow:
   serviceAccount:
     create: true
     name: argo-workflow
   rbac:
     create: true
+
+# ---------------------------------------------------------------------------
+# Artifact repository (S3-compatible: SeaweedFS, MinIO, R2, S3)
+# ---------------------------------------------------------------------------
+# Default: no artifact repository configured and no log archival, so an
+# out-of-the-box install has nothing to leak and nothing to misconfigure.
+#
+# To enable, uncomment the `s3` block and create the referenced Secret
+# out-of-band. `accessKeySecret`/`secretKeySecret` are Secret REFERENCES —
+# never inline the keys here, and never commit a Secret manifest to this repo.
+#
+#   kubectl -n <ns> create secret generic argo-artifacts-s3 \
+#     --from-literal=accesskey=<id> --from-literal=secretkey=<key>
+#
+artifactRepository:
+  archiveLogs: false
+  # s3:
+  #   endpoint: seaweedfs-s3.seaweedfs.svc.cluster.local:8333
+  #   bucket: argo-artifacts
+  #   region: us-east-1
+  #   insecure: true          # in-cluster plaintext; false for public S3/R2
+  #   keyFormat: "{{workflow.namespace}}/{{workflow.name}}/{{pod.name}}"
+  #   accessKeySecret:
+  #     name: argo-artifacts-s3
+  #     key: accesskey
+  #   secretKeySecret:
+  #     name: argo-artifacts-s3
+  #     key: secretkey

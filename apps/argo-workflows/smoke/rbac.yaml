@@ -1,0 +1,49 @@
+# Extra, namespace-scoped RBAC for the vk-native indirection smoke.
+#
+# The chart's `workflow.rbac.create` grant covers what argoexec needs to report
+# step results (workflowtaskresults). It deliberately does NOT let a workflow
+# create arbitrary objects. The smoke's `resource` template creates, watches
+# and deletes one batch/v1 Job, so it needs that verb set spelled out here.
+#
+# Everything below is namespaced — no ClusterRole, no ClusterRoleBinding.
+# Apply into the same namespace as the Argo Workflows release:
+#
+#   kubectl -n <ns> apply -f smoke/rbac.yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-vk-native-smoke
+  labels:
+    app.kubernetes.io/name: argo-workflows
+    dhnt.io/smoke: vk-native-indirection
+rules:
+  # Create / watch / delete the indirection Job. `patch` and `update` are
+  # required by `setOwnerReference: true`, which writes the owning Workflow
+  # into the Job's metadata after creation.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
+  # Read-only visibility into the Pod the Job spawns, so an operator debugging
+  # a Pending payload can see the scheduling event through the workflow's own
+  # ServiceAccount. No `log` and no `exec` subresource: vk-native supports
+  # neither, and granting them would imply a capability that does not exist.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-vk-native-smoke
+  labels:
+    app.kubernetes.io/name: argo-workflows
+    dhnt.io/smoke: vk-native-indirection
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-workflow-vk-native-smoke
+subjects:
+  - kind: ServiceAccount
+    # Matches `workflow.serviceAccount.name` in ../values.yaml.
+    name: argo-workflow
