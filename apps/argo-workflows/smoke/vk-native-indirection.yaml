@@ -1,0 +1,163 @@
+# vk-native indirection smoke — the machine-testable statement of the DKS
+# contract between Argo Workflows and virtual-kubelet ("native") nodes.
+#
+# THE CONTRACT
+#
+#   Argo-owned pods  ->  outpost.dhnt.io/backend=k3s      (HARD, no fallback)
+#   The payload pod  ->  outpost.dhnt.io/backend=vk-native (HARD, no fallback)
+#
+# Argo never runs a step ON vk-native. vk-native provides exactly one
+# container, literal env, and no init containers / sidecars / envFrom /
+# projected secrets / logs / exec — which is strictly less than argoexec's
+# init+wait sidecars require. So the workflow reaches native execution
+# INDIRECTLY: an Argo `resource` template (running on k3s) creates an ordinary
+# batch/v1 Job, watches its status via the Kubernetes API, and deletes it.
+#
+# NO FALLBACK. Every placement rule here is a hard `nodeSelector`, never a
+# `preferredDuringSchedulingIgnoredDuringExecution` affinity. If the matching
+# node class is absent the pod stays Pending and the workflow fails — it must
+# never silently execute somewhere else. `backoffLimit: 0` says the same thing
+# in the time dimension: no retry onto a different node.
+#
+# IMAGES. `job-image` has NO default: it is a required submit-time parameter
+# and it MUST be digest-pinned (`repo/name@sha256:...`). A mutable tag would
+# make this smoke non-deterministic, and no single Linux image is a truthful
+# default for a fleet whose native nodes may be linux/darwin/windows on
+# amd64/arm64 — the OS and architecture you are targeting are explicit
+# parameters, and the artifact that runs there is yours to supply.
+#
+# Apply smoke/rbac.yaml first (the `argo-workflow` ServiceAccount cannot touch
+# batch/v1 Jobs otherwise). Usage: see smoke/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: vk-native-indirection-smoke
+  labels:
+    app.kubernetes.io/name: argo-workflows
+    app.kubernetes.io/part-of: dhnt-dks
+    dhnt.io/smoke: vk-native-indirection
+  annotations:
+    dhnt.io/contract: >-
+      argo-on-k3s, payload-on-vk-native, hard-placement, no-fallback
+spec:
+  entrypoint: indirection
+  onExit: delete-job
+  serviceAccountName: argo-workflow
+
+  # ---- Argo-owned pods: real k3s agent nodes ONLY -------------------------
+  # Applies to every pod this workflow creates, including the `resource`
+  # template pods below. Hard requirement by construction: the scheduler
+  # cannot place these anywhere else, so there is nothing to "fall back" to.
+  nodeSelector:
+    outpost.dhnt.io/backend: k3s
+    kubernetes.io/os: linux
+  # Deliberately empty: a virtual-kubelet toleration here would readmit the
+  # exact failure mode this template exists to rule out.
+  tolerations: []
+
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+
+  arguments:
+    parameters:
+      # REQUIRED, no default — must be digest-pinned, e.g.
+      #   ghcr.io/example/payload@sha256:<64 hex>
+      - name: job-image
+      # REQUIRED, no default — a YAML/JSON flow sequence, e.g.
+      #   ["/bin/true"]   or   ["powershell","-Command","exit 0"]
+      # There is no cross-OS default command; supply the one your artifact has.
+      - name: job-command
+      # Explicit target selection. These become kubernetes.io/os and
+      # kubernetes.io/arch nodeSelector keys on the payload pod.
+      - name: target-os
+        value: linux
+      - name: target-arch
+        value: amd64
+      # Taint key the native nodes carry. Overridable per fleet.
+      - name: vk-taint-key
+        value: virtual-kubelet.io/provider
+
+  templates:
+    - name: indirection
+      steps:
+        - - name: create-and-watch
+            template: create-watch-job
+
+    # ---- The indirection itself -----------------------------------------
+    # Runs argoexec on a k3s node. Talks to the API server; it never runs a
+    # container on vk-native and never reads the payload pod's logs (vk-native
+    # supports neither logs nor exec).
+    - name: create-watch-job
+      resource:
+        action: create
+        setOwnerReference: true
+        # "Watch" == the resource template polls this Job's status until one
+        # of these conditions holds. Success and failure are BOTH explicit, so
+        # a Job that can never be scheduled fails the workflow by timeout
+        # rather than passing by omission.
+        successCondition: status.succeeded > 0
+        failureCondition: status.failed > 0
+        manifest: |
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "{{workflow.name}}-vk-native"
+            labels:
+              dhnt.io/smoke: vk-native-indirection
+              dhnt.io/backend: vk-native
+          spec:
+            # No fallback in time: one attempt, no rescheduling onto another
+            # node after a failure.
+            backoffLimit: 0
+            completions: 1
+            parallelism: 1
+            template:
+              metadata:
+                labels:
+                  dhnt.io/smoke: vk-native-indirection
+                  dhnt.io/backend: vk-native
+              spec:
+                restartPolicy: Never
+                # vk-native cannot mount projected volumes, and the default
+                # SA token IS a projected volume. Must be false.
+                automountServiceAccountToken: false
+                # Hard placement: native nodes of exactly this os/arch.
+                nodeSelector:
+                  outpost.dhnt.io/backend: vk-native
+                  kubernetes.io/os: "{{workflow.parameters.target-os}}"
+                  kubernetes.io/arch: "{{workflow.parameters.target-arch}}"
+                tolerations:
+                  - key: "{{workflow.parameters.vk-taint-key}}"
+                    operator: Exists
+                    effect: NoSchedule
+                # Exactly one container. No initContainers, no sidecars, no
+                # volumes, no envFrom, no valueFrom — the full vk-native
+                # capability envelope and nothing beyond it.
+                containers:
+                  - name: payload
+                    image: "{{workflow.parameters.job-image}}"
+                    command: {{workflow.parameters.job-command}}
+                    env:
+                      - name: DHNT_BACKEND
+                        value: vk-native
+                      - name: DHNT_WORKFLOW
+                        value: "{{workflow.name}}"
+                      - name: DHNT_TARGET_OS
+                        value: "{{workflow.parameters.target-os}}"
+                      - name: DHNT_TARGET_ARCH
+                        value: "{{workflow.parameters.target-arch}}"
+
+    # ---- Delete ----------------------------------------------------------
+    # Runs as the workflow's onExit handler, so the Job is removed on success,
+    # failure, and cancellation alike. `setOwnerReference` above is the
+    # belt-and-braces path for the case where this handler never runs.
+    - name: delete-job
+      resource:
+        action: delete
+        flags:
+          - job
+          - "{{workflow.name}}-vk-native"
+          - "-n"
+          - "{{workflow.namespace}}"

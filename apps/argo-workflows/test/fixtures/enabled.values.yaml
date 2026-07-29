@@ -1,0 +1,35 @@
+# Render-test overlay: turns ON the two optional subsystems that ../../values.yaml
+# ships commented out, so test/render.sh can prove they wire up to Secret
+# REFERENCES and never to inline credentials.
+#
+# This file is test input. It is not installed, and it contains no secret
+# material — only the names of Secrets an operator creates out-of-band.
+controller:
+  persistence:
+    archive: true
+    archiveTTL: 30d
+    postgresql:
+      host: postgres.argo-render-test.svc.cluster.local
+      port: 5432
+      database: argo
+      tableName: argo_workflows
+      userNameSecret:
+        name: argo-archive-postgres
+        key: username
+      passwordSecret:
+        name: argo-archive-postgres
+        key: password
+
+artifactRepository:
+  archiveLogs: true
+  s3:
+    endpoint: seaweedfs-s3.seaweedfs.svc.cluster.local:8333
+    bucket: argo-artifacts
+    region: us-east-1
+    insecure: true
+    accessKeySecret:
+      name: argo-artifacts-s3
+      key: accesskey
+    secretKeySecret:
+      name: argo-artifacts-s3
+      key: secretkey

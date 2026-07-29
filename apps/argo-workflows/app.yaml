@@ -3,11 +3,14 @@ kind: AppEntry
 metadata:
   id: argo-workflows
   name: Argo Workflows
-  version: "1.0"
-  categories: [ci-cd, orchestration, developer-tools]
-  tags: [workflow, dag, kubernetes, ci, popular]
+  # Display version = the Argo Workflows appVersion shipped by the pinned
+  # chart (argo-helm argo-workflows-1.0.20 -> appVersion v4.0.7).
+  version: "4.0.7"
+  categories: [ci-cd, dev-tools, ml]
+  tags: [workflow, dag, kubernetes, ci, batch, dks]
   maintainers:
     - email: ops@dhnt.io
+  visibility: public
   description: >
     Container-native workflow engine for Kubernetes — run a DAG of steps as pods,
     with automatic retry and node-failure rescheduling. This is the tier-5 (DKS)
@@ -21,13 +24,31 @@ spec:
   chart:
     repo: https://argoproj.github.io/argo-helm
     name: argo-workflows
-    version: "1.0.20"   # argo v4.0.7 — Apache-2.0
+    # Exact pin -> Argo Workflows v4.0.7, Apache-2.0.
+    # Bump here AND in test/render.sh in the same commit; test/static.sh
+    # fails closed on any drift between app.yaml, README.md and the tests.
+    version: "1.0.20"
   targetNamespace: "{{.UserNamespace}}"
   rbac:
-    # namespaced controller (singleNamespace) — watches Workflows only in its own
-    # namespace, so no cluster-scoped RBAC is granted.
-    clusterScoped: false
+    # TRUE, deliberately. This is not a mistake to be "fixed" by flipping it
+    # back to false:
+    #
+    #   * the chart's default install creates the Argo CRDs (workflows,
+    #     workflowtemplates, cronworkflows, clusterworkflowtemplates,
+    #     workfloweventbindings, workflowtaskresults, workflowtasksets,
+    #     workflowartifactgctasks) and a CRD is a cluster-scoped object by
+    #     definition;
+    #   * `clusterworkflowtemplates` additionally needs a ClusterRole for the
+    #     controller/server to read them.
+    #
+    # values.yaml keeps `singleNamespace: true`, which confines the
+    # *controller's watch* to the install namespace. That is a tenancy
+    # property, not a cluster-scope property. Advertising
+    # `clusterScoped: false` while shipping CRDs would be false, so this
+    # entry accepts the cloudbox-admin review gate instead.
+    #
+    # Operators who want a genuinely namespace-only install must have an admin
+    # pre-apply the CRDs once, cluster-wide, and then install with
+    # `crds.install=false` — see README.md, "Two install modes".
+    clusterScoped: true
   defaultValuesFile: values.yaml
-service:
-  type: ClusterIP
-  port: 2746
