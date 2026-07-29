@@ -76,7 +76,7 @@ controller:
       # (evicted, node lost, OOM-kill) and never retries a non-zero exit from
       # the user's container.
       retryStrategy:
-        limit: "2"
+        limit: 2
         retryPolicy: OnError
       podGC:
         strategy: OnWorkflowSuccess

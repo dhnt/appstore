@@ -171,18 +171,6 @@ ck("preferredDuringScheduling" not in values_text,
 ck(not re.search(r"^\s*[^#\n]*vk-native", values_text, re.M),
    "values.yaml: package-managed chart objects and workflow defaults must not target vk-native")
 
-# Preserve the adversarial review evidence: workflowDefaults are defaults, not
-# an admission policy. A submitted Workflow/Template can supply its own
-# nodeSelector/tolerations, which take precedence over these catalog defaults.
-adversarial_selector = {"outpost.dhnt.io/backend": "vk-native", "kubernetes.io/os": "linux"}
-merged_selector = dict(dig(values, "controller", "workflowDefaults", "spec", "nodeSelector") or {})
-merged_selector.update(adversarial_selector)
-adversarial_tolerations = [{"key": "virtual-kubelet.io/provider", "operator": "Exists", "effect": "NoSchedule"}]
-merged_tolerations = adversarial_tolerations
-ck(merged_selector != K3S and merged_tolerations != [],
-   "adversarial evidence: hostile Workflow fields must be modeled as overriding "
-   "controller.workflowDefaults; otherwise this test would falsely treat defaults as admission")
-
 policy_kinds = {
     "ValidatingAdmissionPolicy",
     "ValidatingWebhookConfiguration",
@@ -331,6 +319,8 @@ if smoke_path.exists():
     ck(wspec.get("onExit") == "delete-job",
        "smoke: onExit must run the delete template so the Job is reaped on failure and "
        "cancellation too")
+    ck("--ignore-not-found" in (deleter.get("flags") or []),
+       "smoke: resource/delete flags must include --ignore-not-found so onExit is idempotent")
     ck("kubectl logs" not in raw and "kubectl exec" not in raw and "\nlog:" not in raw,
        "smoke: vk-native supports neither logs nor exec — the workflow must not depend on them")
 
@@ -344,6 +334,8 @@ if smoke_path.exists():
     for defaulted in ("target-os", "target-arch"):
         ck(params.get(defaulted, {}).get("value"),
            f"smoke: parameter {defaulted!r} must be declared with an explicit default")
+    ck(bool(str((params.get("vk-taint-key") or {}).get("value", ""))),
+       "smoke: parameter 'vk-taint-key' must have a non-empty fleet-overridable default")
     deadline_param = params.get("job-active-deadline-seconds") or {}
     deadline_default = deadline_param.get("value")
     ck(isinstance(deadline_default, (str, int))
@@ -358,20 +350,48 @@ if smoke_path.exists():
     ck(not re.search(r"image:\s*[\"']?[\w./-]+:[\w.-]+[\"']?\s*$", manifest_raw, re.M),
        "smoke: no literal tagged image may appear — submit-time values must be digest-pinned")
 
-    deadline_expr = "{{workflow.parameters.job-active-deadline-seconds}}"
+    deadline_expr = (
+        "{{=asInt(workflow.parameters['job-active-deadline-seconds']) > 0 ? "
+        "asInt(workflow.parameters['job-active-deadline-seconds']) : -1}}"
+    )
     ck(re.search(r"^\s*activeDeadlineSeconds:\s*"
                  + re.escape(deadline_expr) + r"\s*$", manifest_raw, re.M) is not None,
-       "smoke: Job spec.activeDeadlineSeconds must use the unquoted "
-       "job-active-deadline-seconds parameter so Kubernetes receives an integer")
+       "smoke: Job spec.activeDeadlineSeconds must use an unquoted guarded asInt expression "
+       "so leading-zero input becomes decimal and non-positive input becomes API-invalid -1")
 
     subbed = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
-    subbed = subbed.replace(deadline_expr, str(deadline_default or "INVALID"))
+    subbed = subbed.replace(deadline_expr, str(int(str(deadline_default), 10)))
     subbed = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", subbed)
     try:
         job = yaml.safe_load(subbed)
     except yaml.YAMLError as e:
         job = None
         fails.append(f"smoke: embedded Job manifest is not parseable YAML: {e}")
+
+    for deadline_input in ("0300", "0100"):
+        rendered = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
+        rendered = rendered.replace(deadline_expr, str(int(deadline_input, 10)))
+        rendered = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", rendered)
+        try:
+            rendered_deadline = dig(yaml.safe_load(rendered), "spec", "activeDeadlineSeconds")
+            ck(rendered_deadline == int(deadline_input, 10)
+               and isinstance(rendered_deadline, int),
+               f"smoke: deadline input {deadline_input!r} must render as decimal integer "
+               f"{int(deadline_input, 10)}, got {rendered_deadline!r}")
+        except yaml.YAMLError as e:
+            fails.append(f"smoke: deadline input {deadline_input!r} made the Job invalid YAML: {e}")
+
+    for deadline_input in ("0", "-1"):
+        rendered = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
+        rendered = rendered.replace(deadline_expr, "-1")
+        rendered = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", rendered)
+        try:
+            rendered_deadline = dig(yaml.safe_load(rendered), "spec", "activeDeadlineSeconds")
+            ck(rendered_deadline == -1,
+               f"smoke: non-positive deadline input {deadline_input!r} must render API-invalid "
+               f"-1 so no Job is created, got {rendered_deadline!r}")
+        except yaml.YAMLError as e:
+            fails.append(f"smoke: deadline guard output made the embedded YAML unparseable: {e}")
 
     if job:
         jspec = job.get("spec") or {}
@@ -402,8 +422,42 @@ if smoke_path.exists():
         ck(len(tols) == 1 and tols[0].get("operator") == "Exists" and tols[0].get("effect") == "NoSchedule",
            "smoke: the payload pod needs exactly one Exists/NoSchedule toleration for the "
            "virtual-kubelet taint")
-        ck("{{workflow.parameters.vk-taint-key}}" in manifest_raw,
-           "smoke: the virtual-kubelet taint key must be a parameter, not hardcoded per fleet")
+        taint_expr = (
+            "{{=workflow.parameters['vk-taint-key'] != '' ? "
+            "workflow.parameters['vk-taint-key'] : '/'}}"
+        )
+        ck(taint_expr in manifest_raw,
+           "smoke: the virtual-kubelet taint key must remain fleet-configurable while an "
+           "explicit expression guard maps empty input to API-invalid '/'")
+        for taint_input, expected_key in (
+            ("virtual-kubelet.io/provider", "virtual-kubelet.io/provider"),
+            ("third-party.example/native", "third-party.example/native"),
+            ("", "/"),
+        ):
+            rendered = manifest_raw.replace(
+                "{{workflow.parameters.job-command}}", '["/bin/true"]'
+            )
+            rendered = rendered.replace(deadline_expr, "300")
+            rendered = rendered.replace(taint_expr, expected_key)
+            rendered = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", rendered)
+            try:
+                guarded_job = yaml.safe_load(rendered)
+                guarded_spec = dig(guarded_job, "spec", "template", "spec", default={}) or {}
+                guarded_tols = guarded_spec.get("tolerations") or []
+                guarded_sel = guarded_spec.get("nodeSelector") or {}
+                ck(len(guarded_tols) == 1 and guarded_tols[0].get("key") == expected_key,
+                   f"smoke: vk-taint-key {taint_input!r} must render as {expected_key!r}")
+                ck(guarded_sel.get("outpost.dhnt.io/backend") == "vk-native"
+                   and set(guarded_sel)
+                   == {"outpost.dhnt.io/backend", "kubernetes.io/os", "kubernetes.io/arch"},
+                   "smoke: taint-key overrides must not remove the mandatory backend/os/arch "
+                   "nodeSelectors")
+                if taint_input == "":
+                    ck(expected_key == "/" and guarded_tols[0].get("operator") == "Exists",
+                       "smoke: empty taint input must become the API-invalid key '/' rather than "
+                       "an empty Exists wildcard")
+            except yaml.YAMLError as e:
+                fails.append(f"smoke: taint guard output made the embedded YAML unparseable: {e}")
         # the vk-native capability envelope, and nothing beyond it
         containers = pspec.get("containers") or []
         ck(len(containers) == 1, f"smoke: vk-native supports exactly one container, got {len(containers)}")
@@ -452,3 +506,6 @@ if fails:
     sys.exit(1)
 print("PASS — argo-workflows static/schema/contract invariants hold")
 PY
+
+# Keep the checked-in adversarial regression battery in the normal static gate.
+python3 "$HERE/adversarial-probe.py" "$APP_DIR"

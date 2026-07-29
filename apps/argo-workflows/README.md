@@ -129,6 +129,7 @@ volume), no init containers, no sidecars, no volumes, no `envFrom`.
 | no `affinity` / `preferred…` anywhere | both | a soft rule *is* a fallback |
 | `backoffLimit: 0`, `restartPolicy: Never` | Job | no fallback in the time dimension either |
 | positive `activeDeadlineSeconds` | Job | a Pending, unschedulable Job reaches terminal failure |
+| guarded deadline and taint-key inputs | Job | non-positive deadlines and empty taint keys make the Job API-invalid before a pod exists |
 | explicit `failureCondition` | resource template | Argo observes the Job failure; it cannot pass by omission |
 | `pods/log`, `pods/exec` not granted | `smoke/rbac.yaml` | granting them would imply a capability vk-native does not have |
 
@@ -160,7 +161,12 @@ purpose:
   not as a turnkey command.
 
 The virtual-kubelet taint key is the `vk-taint-key` parameter (default
-`virtual-kubelet.io/provider`); override it if your fleet taints differently.
+`virtual-kubelet.io/provider`); override it with a non-empty Kubernetes taint
+key if your fleet taints differently. An empty key with `operator: Exists`
+would match every `NoSchedule` taint, but it would **not** bypass the mandatory
+`outpost.dhnt.io/backend=vk-native`, OS, and architecture `nodeSelector`
+requirements. The template nevertheless guards empty input by rendering an
+API-invalid key, so Kubernetes rejects the Job before any payload pod exists.
 
 The Job also has a native scheduler boundary:
 `job-active-deadline-seconds` defaults to **300 seconds**. If no matching
@@ -169,8 +175,10 @@ this positive deadline expires, marks the Job failed, and the Argo resource
 template observes that terminal failure through its existing
 `failureCondition`. Override it at submission with
 `-p job-active-deadline-seconds=<positive-seconds>` to match fleet scheduling
-latency. This is additional to, and does not replace, the workflow/task timeout
-semantics enforced by Argo.
+latency. The Kubernetes Job API requires `activeDeadlineSeconds` to be greater
+than zero; the template explicitly maps non-positive input to API-invalid `-1`,
+so submission fails closed before a viable Job can schedule. This is additional
+to, and does not replace, the workflow/task timeout semantics enforced by Argo.
 
 ## Install
 
