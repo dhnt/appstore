@@ -96,6 +96,20 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
         outpost.dhnt.io/backend: k3s
+      initContainers:
+      - name: prepare-data-directories
+        image: chrislusf/seaweedfs:3.71
+        command: [sh, -c, "mkdir -p /data/m /data/i /data/v"]
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
       containers:
       - name: weed
         image: chrislusf/seaweedfs:3.71
@@ -108,7 +122,7 @@ spec:
         - server
         - -master.dir=/data/m
         - -volume.dir.idx=/data/i
-        - -volume.dir=/data/v
+        - -dir=/data/v
         - -filer
         - -s3
         - -s3.config=/config/s3.json
