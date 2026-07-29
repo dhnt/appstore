@@ -76,6 +76,7 @@ spec:
       - name: target-arch
         value: amd64
       # Taint key the native nodes carry. Overridable per fleet.
+      # Empty input is rejected by the guarded expression in the Job manifest.
       - name: vk-taint-key
         value: virtual-kubelet.io/provider
       # Native scheduler boundary. If no matching vk-native node can run the
@@ -117,9 +118,10 @@ spec:
             # node after a failure.
             backoffLimit: 0
             # Convert before substituting into the embedded YAML so inputs such
-            # as "0300" become the decimal Kubernetes integer 300, not YAML
-            # 1.1 octal 0300.
-            activeDeadlineSeconds: {{=asInt(workflow.parameters['job-active-deadline-seconds'])}}
+            # as "0300" become decimal 300. Non-positive input deliberately
+            # renders -1: the Job API requires this field to be greater than
+            # zero, so no viable Job (and therefore no pod) can be created.
+            activeDeadlineSeconds: {{=asInt(workflow.parameters['job-active-deadline-seconds']) > 0 ? asInt(workflow.parameters['job-active-deadline-seconds']) : -1}}
             completions: 1
             parallelism: 1
             template:
@@ -138,7 +140,11 @@ spec:
                   kubernetes.io/os: "{{workflow.parameters.target-os}}"
                   kubernetes.io/arch: "{{workflow.parameters.target-arch}}"
                 tolerations:
-                  - key: "{{workflow.parameters.vk-taint-key}}"
+                  # Empty key + Exists is a wildcard toleration. Render the
+                  # API-invalid key "/" instead, so an empty override is
+                  # rejected before a viable Job can schedule. Non-empty keys
+                  # remain fleet-configurable.
+                  - key: "{{=workflow.parameters['vk-taint-key'] != '' ? workflow.parameters['vk-taint-key'] : '/'}}"
                     operator: Exists
                     effect: NoSchedule
                 # Exactly one container. No initContainers, no sidecars, no

@@ -334,6 +334,8 @@ if smoke_path.exists():
     for defaulted in ("target-os", "target-arch"):
         ck(params.get(defaulted, {}).get("value"),
            f"smoke: parameter {defaulted!r} must be declared with an explicit default")
+    ck(bool(str((params.get("vk-taint-key") or {}).get("value", ""))),
+       "smoke: parameter 'vk-taint-key' must have a non-empty fleet-overridable default")
     deadline_param = params.get("job-active-deadline-seconds") or {}
     deadline_default = deadline_param.get("value")
     ck(isinstance(deadline_default, (str, int))
@@ -348,11 +350,14 @@ if smoke_path.exists():
     ck(not re.search(r"image:\s*[\"']?[\w./-]+:[\w.-]+[\"']?\s*$", manifest_raw, re.M),
        "smoke: no literal tagged image may appear — submit-time values must be digest-pinned")
 
-    deadline_expr = "{{=asInt(workflow.parameters['job-active-deadline-seconds'])}}"
+    deadline_expr = (
+        "{{=asInt(workflow.parameters['job-active-deadline-seconds']) > 0 ? "
+        "asInt(workflow.parameters['job-active-deadline-seconds']) : -1}}"
+    )
     ck(re.search(r"^\s*activeDeadlineSeconds:\s*"
                  + re.escape(deadline_expr) + r"\s*$", manifest_raw, re.M) is not None,
-       "smoke: Job spec.activeDeadlineSeconds must use an unquoted asInt expression "
-       "so Kubernetes receives a decimal integer even for leading-zero input")
+       "smoke: Job spec.activeDeadlineSeconds must use an unquoted guarded asInt expression "
+       "so leading-zero input becomes decimal and non-positive input becomes API-invalid -1")
 
     subbed = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
     subbed = subbed.replace(deadline_expr, str(int(str(deadline_default), 10)))
@@ -375,6 +380,18 @@ if smoke_path.exists():
                f"{int(deadline_input, 10)}, got {rendered_deadline!r}")
         except yaml.YAMLError as e:
             fails.append(f"smoke: deadline input {deadline_input!r} made the Job invalid YAML: {e}")
+
+    for deadline_input in ("0", "-1"):
+        rendered = manifest_raw.replace("{{workflow.parameters.job-command}}", '["/bin/true"]')
+        rendered = rendered.replace(deadline_expr, "-1")
+        rendered = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", rendered)
+        try:
+            rendered_deadline = dig(yaml.safe_load(rendered), "spec", "activeDeadlineSeconds")
+            ck(rendered_deadline == -1,
+               f"smoke: non-positive deadline input {deadline_input!r} must render API-invalid "
+               f"-1 so no Job is created, got {rendered_deadline!r}")
+        except yaml.YAMLError as e:
+            fails.append(f"smoke: deadline guard output made the embedded YAML unparseable: {e}")
 
     if job:
         jspec = job.get("spec") or {}
@@ -405,8 +422,42 @@ if smoke_path.exists():
         ck(len(tols) == 1 and tols[0].get("operator") == "Exists" and tols[0].get("effect") == "NoSchedule",
            "smoke: the payload pod needs exactly one Exists/NoSchedule toleration for the "
            "virtual-kubelet taint")
-        ck("{{workflow.parameters.vk-taint-key}}" in manifest_raw,
-           "smoke: the virtual-kubelet taint key must be a parameter, not hardcoded per fleet")
+        taint_expr = (
+            "{{=workflow.parameters['vk-taint-key'] != '' ? "
+            "workflow.parameters['vk-taint-key'] : '/'}}"
+        )
+        ck(taint_expr in manifest_raw,
+           "smoke: the virtual-kubelet taint key must remain fleet-configurable while an "
+           "explicit expression guard maps empty input to API-invalid '/'")
+        for taint_input, expected_key in (
+            ("virtual-kubelet.io/provider", "virtual-kubelet.io/provider"),
+            ("third-party.example/native", "third-party.example/native"),
+            ("", "/"),
+        ):
+            rendered = manifest_raw.replace(
+                "{{workflow.parameters.job-command}}", '["/bin/true"]'
+            )
+            rendered = rendered.replace(deadline_expr, "300")
+            rendered = rendered.replace(taint_expr, expected_key)
+            rendered = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", rendered)
+            try:
+                guarded_job = yaml.safe_load(rendered)
+                guarded_spec = dig(guarded_job, "spec", "template", "spec", default={}) or {}
+                guarded_tols = guarded_spec.get("tolerations") or []
+                guarded_sel = guarded_spec.get("nodeSelector") or {}
+                ck(len(guarded_tols) == 1 and guarded_tols[0].get("key") == expected_key,
+                   f"smoke: vk-taint-key {taint_input!r} must render as {expected_key!r}")
+                ck(guarded_sel.get("outpost.dhnt.io/backend") == "vk-native"
+                   and set(guarded_sel)
+                   == {"outpost.dhnt.io/backend", "kubernetes.io/os", "kubernetes.io/arch"},
+                   "smoke: taint-key overrides must not remove the mandatory backend/os/arch "
+                   "nodeSelectors")
+                if taint_input == "":
+                    ck(expected_key == "/" and guarded_tols[0].get("operator") == "Exists",
+                       "smoke: empty taint input must become the API-invalid key '/' rather than "
+                       "an empty Exists wildcard")
+            except yaml.YAMLError as e:
+                fails.append(f"smoke: taint guard output made the embedded YAML unparseable: {e}")
         # the vk-native capability envelope, and nothing beyond it
         containers = pspec.get("containers") or []
         ck(len(containers) == 1, f"smoke: vk-native supports exactly one container, got {len(containers)}")
