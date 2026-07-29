@@ -146,7 +146,7 @@ ck(values.get("createAggregateRoles") is False,
 ck(values.get("singleNamespace") is True, "values.yaml: singleNamespace must be true")
 
 # ===========================================================================
-# 3. Placement: every Argo-owned pod is pinned to real k3s agent nodes
+# 3. Placement: explicit package pods plus defense-in-depth workflow defaults
 # ===========================================================================
 K3S = {"outpost.dhnt.io/backend": "k3s", "kubernetes.io/os": "linux"}
 for where, sel in (
@@ -169,19 +169,20 @@ ck("preferredDuringScheduling" not in values_text,
    "values.yaml: soft (preferred) affinity is forbidden — placement must be a hard requirement "
    "with no fallback")
 ck(not re.search(r"^\s*[^#\n]*vk-native", values_text, re.M),
-   "values.yaml: no uncommented reference to vk-native may appear — Argo pods never run there")
+   "values.yaml: package-managed chart objects and workflow defaults must not target vk-native")
 
-# workflowDefaults are defaults, not an admission policy. Argo applies them only
-# where a submitted Workflow/Template has not supplied its own value; a user's
-# nodeSelector/tolerations therefore take precedence over the catalog defaults.
-# The placement claim above says every Argo-owned workflow pod is hard-pinned to
-# k3s, so the package must include some non-defaulting enforcement before this
-# can be true for hostile or mistaken submissions.
+# Preserve the adversarial review evidence: workflowDefaults are defaults, not
+# an admission policy. A submitted Workflow/Template can supply its own
+# nodeSelector/tolerations, which take precedence over these catalog defaults.
 adversarial_selector = {"outpost.dhnt.io/backend": "vk-native", "kubernetes.io/os": "linux"}
 merged_selector = dict(dig(values, "controller", "workflowDefaults", "spec", "nodeSelector") or {})
 merged_selector.update(adversarial_selector)
 adversarial_tolerations = [{"key": "virtual-kubelet.io/provider", "operator": "Exists", "effect": "NoSchedule"}]
 merged_tolerations = adversarial_tolerations
+ck(merged_selector != K3S and merged_tolerations != [],
+   "adversarial evidence: hostile Workflow fields must be modeled as overriding "
+   "controller.workflowDefaults; otherwise this test would falsely treat defaults as admission")
+
 policy_kinds = {
     "ValidatingAdmissionPolicy",
     "ValidatingWebhookConfiguration",
@@ -189,20 +190,46 @@ policy_kinds = {
     "K8sRequiredLabels",
 }
 enforcement_docs = []
-for f in sorted(list(APP.rglob("*.yaml")) + list((APP / "smoke").rglob("*.yaml"))):
+for f in sorted(APP.rglob("*.yaml")):
     try:
         enforcement_docs.extend(d for d in yaml.safe_load_all(f.read_text()) if isinstance(d, dict))
     except yaml.YAMLError:
         pass
 has_non_defaulting_placement_enforcement = any(d.get("kind") in policy_kinds for d in enforcement_docs)
+
+readme_text = (APP / "README.md").read_text()
+placement_docs = readme_text + "\n" + (APP / "values.yaml").read_text()
+absolute_workflow_claims = [
+    line.strip()
+    for line in placement_docs.splitlines()
+    if re.search(
+        r"(?i)\b(?:every Argo-owned pod|every workflow (?:executor )?pod|"
+        r"all arbitrary (?:submitted )?workflows?)\b",
+        line,
+    )
+]
 ck(
     has_non_defaulting_placement_enforcement
-    or (merged_selector == K3S and merged_tolerations == []),
-    "values.yaml: controller.workflowDefaults is overrideable by submitted Workflows, so it does "
-    "not hard-pin every Argo-owned workflow pod to k3s. An adversarial Workflow can set "
-    f"spec.nodeSelector={adversarial_selector} and tolerations={adversarial_tolerations}, yielding "
-    f"effective nodeSelector={merged_selector} without any admission policy in this package to reject it"
+    or not absolute_workflow_claims,
+    "README.md/values.yaml: package claims hard placement for arbitrary workflow pods without "
+    f"an admission policy: {absolute_workflow_claims}"
 )
+for needle in (
+    "defense-in-depth defaulting, not admission enforcement",
+    "can override the defaults",
+    "Third-party multi-tenant installs",
+    "external admission policy",
+):
+    ck(needle in readme_text,
+       f"README.md: placement boundary must explicitly document {needle!r}")
+values_comments = " ".join(
+    line.lstrip()[1:].strip() for line in (APP / "values.yaml").read_text().splitlines()
+    if line.lstrip().startswith("#")
+)
+for needle in ("Defense-in-depth", "not an admission policy", "hostile submission",
+               "external admission policy"):
+    ck(needle in values_comments,
+       f"values.yaml comments: workflowDefaults caveat must document {needle!r}")
 
 # ===========================================================================
 # 4. No embedded credentials anywhere in the app entry

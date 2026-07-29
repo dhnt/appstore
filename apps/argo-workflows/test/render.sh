@@ -7,8 +7,8 @@
 #   * workflow-controller and argo-server Deployments exist and are pinned to
 #     real k3s agent nodes (outpost.dhnt.io/backend=k3s, kubernetes.io/os=linux);
 #   * the ServiceAccounts and namespaced RBAC named in ../values.yaml exist;
-#   * the workflow-controller ConfigMap carries the workflowDefaults that keep
-#     every user workflow pod off vk-native;
+#   * the workflow-controller ConfigMap carries the k3s workflowDefaults used
+#     as defense in depth when a submission does not override placement;
 #   * the cluster-scoped objects the chart really creates are present, which is
 #     what makes app.yaml's `clusterScoped: true` the honest declaration;
 #   * with test/fixtures/enabled.values.yaml the workflow archive and the
@@ -196,7 +196,7 @@ ck(cluster_roles,
 print("    cluster-scoped objects (why clusterScoped: true): "
       + ", ".join(sorted(cluster_scoped)[:4]) + f" ... [{len(cluster_scoped)} total]")
 
-# --- controller ConfigMap: workflowDefaults keep user pods off vk-native ---
+# --- controller ConfigMap: defense-in-depth workflow placement defaults -----
 cms = [d for d in by_kind(default_docs, "ConfigMap")
        if "workflow-controller" in (d.get("metadata") or {}).get("name", "")]
 ck(len(cms) == 1, f"expected one workflow-controller ConfigMap, got {len(cms)}")
@@ -219,9 +219,10 @@ if cms:
     ck(spec.get("serviceAccountName") == "argo-workflow",
        "workflowDefaults.spec.serviceAccountName must pin the workflow ServiceAccount")
 
-# --- nothing Argo-owned may reference vk-native ----------------------------
+# --- the package's default chart configuration must not target vk-native ----
 ck("vk-native" not in default_text,
-   "the default render mentions vk-native — no Argo-owned object may target virtual-kubelet")
+   "the default render mentions vk-native — package-managed chart objects and defaults "
+   "must target k3s")
 
 # --- enabled overlay: archive + artifacts by Secret reference only ---------
 enabled_text, enabled_docs = docs("enabled.yaml")

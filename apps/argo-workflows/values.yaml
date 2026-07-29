@@ -5,11 +5,11 @@
 #   1. Namespaced watch. `singleNamespace: true` keeps the controller reading
 #      Workflows only in its own namespace. (CRDs are still cluster-scoped —
 #      app.yaml declares `clusterScoped: true` honestly.)
-#   2. Every Argo-owned pod — controller, server, and every workflow
-#      executor/init/wait pod — is pinned to REAL k3s agent nodes with a HARD
-#      nodeSelector. Never a soft/preferred affinity: virtual-kubelet
-#      (`outpost.dhnt.io/backend=vk-native`) cannot run argoexec's
-#      init/wait sidecars, so a fallback would silently wedge workflows.
+#   2. The chart's controller and server pods have explicit HARD selectors for
+#      real k3s agent nodes. The checked-in smoke WorkflowTemplate carries the
+#      same explicit selector for its own executor/init/wait pods. The
+#      workflowDefaults below are defense in depth for normal submissions, not
+#      admission enforcement: a submitted Workflow can override them.
 #   3. No credentials live here. The workflow archive and the S3-compatible
 #      artifact repository are wired with Secret *references* only; the
 #      Secrets themselves are created out-of-band (sealed-secrets / ESO /
@@ -59,10 +59,12 @@ controller:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
 
-  # Defaults merged into EVERY Workflow submitted to this install. This is the
-  # single most important control in the file: it is what keeps user workflow
-  # pods (main + argoexec init/wait) off virtual-kubelet nodes even when the
-  # submitted Workflow forgets to say so.
+  # Defense-in-depth defaults for normally submitted Workflows. They supply
+  # k3s placement when a Workflow omits it, but Workflow fields are
+  # overrideable: this is not an admission policy and does not hard-pin a
+  # hostile submission. Third-party multi-tenant installs that require
+  # enforcement against hostile submissions must add an external admission
+  # policy.
   workflowDefaults:
     spec:
       serviceAccountName: argo-workflow

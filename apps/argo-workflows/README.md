@@ -23,9 +23,9 @@ conformance run — into an Argo `Workflow`:
   failures (pod evicted, node lost, OOM-kill) but **not** a container's non-zero
   test result — the "retry infra, keep results" contract, native to Argo.
 
-`values.yaml` applies that retry contract to every submitted Workflow through
-`controller.workflowDefaults`, so a workflow that forgets to ask for it gets it
-anyway.
+`values.yaml` offers that retry contract through
+`controller.workflowDefaults`, so a workflow that does not override it gets the
+default automatically.
 
 ## Cluster scope, honestly
 
@@ -50,20 +50,34 @@ asserts the declaration matches what the chart actually renders.
 | **Default** | `true` | cloudbox-admin (clusterScoped gate) | first install on a cluster; `crds.keep: true` so uninstall never cascade-deletes Workflow objects |
 | **CRDs pre-applied** | `false` | any user with namespace rights | an admin applies the CRDs cluster-wide once; subsequent per-user installs create only namespaced objects |
 
-## Placement: Argo never runs on virtual-kubelet
+## Placement boundaries
 
 DKS nodes carry `outpost.dhnt.io/backend={k3s,vk-native}` and
 `outpost.dhnt.io/runtime={agent,virtual}`, plus the standard `kubernetes.io/os`
 and `kubernetes.io/arch`.
 
-**Every Argo-owned pod is pinned to `outpost.dhnt.io/backend=k3s`** — the
-controller, the server, and every workflow executor pod (via
-`controller.workflowDefaults`). This is a hard `nodeSelector`, never a
-`preferred…` affinity, because vk-native provides *exactly one container,
+The chart's controller and server pods are explicitly pinned to
+`outpost.dhnt.io/backend=k3s` with a hard `nodeSelector` and empty
+`tolerations`. The checked-in smoke `WorkflowTemplate` independently carries
+that same explicit hard selector for every pod it creates. These are concrete
+pod-spec constraints, never `preferred…` affinity.
+
+`controller.workflowDefaults` supplies the same k3s selector and empty
+tolerations to normal submissions that omit those fields. It is
+**defense-in-depth defaulting, not admission enforcement**: a submitted
+`Workflow` or `WorkflowTemplate` can override the defaults, including
+`nodeSelector` and `tolerations`. This minimal package therefore does not claim
+to hard-pin arbitrary or hostile submitted Workflows.
+
+Third-party multi-tenant installs that require enforcement against hostile
+submissions must add an external admission policy (for example, a cluster
+`ValidatingAdmissionPolicy` or an existing policy engine) that rejects
+disallowed workflow placement. No admission controller or policy is bundled
+with this package.
+
+The placement matters because vk-native provides *exactly one container,
 literal env, and no init containers, sidecars, `envFrom`, projected secrets,
-logs or exec*. argoexec's init + wait sidecars need strictly more than that, so
-a soft rule would let a workflow silently wedge instead of failing fast.
-`tolerations` are explicitly `[]` for the same reason.
+logs or exec*. argoexec's init + wait sidecars need strictly more than that.
 
 Native execution is therefore reached **indirectly** — see the smoke below.
 
@@ -94,7 +108,7 @@ exactly that shape, and `test/render.sh` renders it to prove the wiring produces
 the DKS contract machine-testable:
 
 ```
-Argo-owned pods -> outpost.dhnt.io/backend=k3s       (hard, no fallback)
+Smoke's Argo pods -> outpost.dhnt.io/backend=k3s       (hard, no fallback)
 The payload pod -> outpost.dhnt.io/backend=vk-native (hard, no fallback)
 ```
 
