@@ -276,7 +276,6 @@ for test_val, guarded_key in (
     subbed = manifest_raw
     subbed = subbed.replace('{{workflow.parameters.job-command}}', '["/bin/true"]')
     subbed = subbed.replace(deadline_expr, "300")
-    subbed = subbed.replace("{{workflow.parameters.job-image}}", "PLACEHOLDER")
     subbed = subbed.replace("{{workflow.parameters.target-os}}", "linux")
     subbed = subbed.replace("{{workflow.parameters.target-arch}}", "amd64")
     subbed = subbed.replace(taint_expr, guarded_key)
@@ -324,6 +323,53 @@ ck(
     f"  must map empty input to API-invalid '/' before a Job can exist, while\n"
     f"  preserving non-empty third-party fleet taint keys verbatim.\n"
     + "\n".join(empty_key_details),
+)
+
+# ===========================================================================
+# PROBE 8 — an OCI image is not a vk-native executable delivery mechanism
+#
+# vk-native treats the container image as a marker. Reproducible execution
+# requires the complete URL/SHA/path annotation tuple; the backend downloads
+# and verifies that archive, extracts the named regular file, and resolves
+# command[0] to the materialized executable. Keep this ratchet because the
+# original smoke incorrectly required a digest-pinned OCI image.
+# ===========================================================================
+native_required = (
+    "job-command",
+    "native-artifact-url",
+    "native-artifact-sha256",
+    "native-artifact-path",
+)
+native_params_ok = all(
+    name in params and "value" not in params[name] for name in native_required
+)
+annotation_pairs = {
+    "outpost.dhnt.io/native-artifact-url": "{{workflow.parameters.native-artifact-url}}",
+    "outpost.dhnt.io/native-artifact-sha256": "{{workflow.parameters.native-artifact-sha256}}",
+    "outpost.dhnt.io/native-artifact-path": "{{workflow.parameters.native-artifact-path}}",
+}
+annotations_ok = all(
+    re.search(
+        r"^\s*" + re.escape(key) + r':\s*["\']?'
+        + re.escape(value) + r'["\']?\s*$',
+        manifest_raw,
+        re.M,
+    )
+    for key, value in annotation_pairs.items()
+)
+marker_ok = (
+    re.search(r"^\s*image:\s*dhnt\.io/native-process\s*$", manifest_raw, re.M)
+    is not None
+    and re.search(r"^\s*imagePullPolicy:\s*Never\s*$", manifest_raw, re.M)
+    is not None
+)
+ck(
+    native_params_ok and annotations_ok and marker_ok and "job-image" not in smoke_text,
+    "vk-native payload is modeled as an OCI image instead of a verified native artifact",
+    "  The smoke must require job-command plus native-artifact URL/SHA/path,\n"
+    "  place the complete tuple on the Job pod annotations, and use only\n"
+    "  image: dhnt.io/native-process with imagePullPolicy: Never. No job-image\n"
+    "  parameter or claim may remain.",
 )
 
 # ===========================================================================

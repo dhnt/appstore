@@ -141,24 +141,32 @@ volume), no init containers, no sidecars, no volumes, no `envFrom`.
 kubectl -n <ns> apply -f smoke/rbac.yaml            # namespaced Role + RoleBinding
 kubectl -n <ns> apply -f smoke/vk-native-indirection.yaml
 argo -n <ns> submit --from workflowtemplate/vk-native-indirection-smoke \
-  -p job-image='ghcr.io/example/payload@sha256:<64 hex>' \
-  -p job-command='["/bin/true"]' \
+  -p native-artifact-url='https://example.invalid/releases/tool-linux-arm64.tar.gz' \
+  -p native-artifact-sha256='<64 lowercase hex characters>' \
+  -p native-artifact-path='tool' \
+  -p job-command='["tool","smoke"]' \
   -p target-os=linux -p target-arch=arm64 \
   -p job-active-deadline-seconds=600 --wait
 ```
 
-`job-image` and `job-command` are **required parameters with no defaults**, on
-purpose:
+`job-command`, `native-artifact-url`, `native-artifact-sha256`, and
+`native-artifact-path` are **required parameters with no defaults**. Together
+they express the actual native execution contract:
 
-- **digest, not tag.** A mutable tag makes the smoke non-deterministic, so the
-  image must be `repo/name@sha256:…`. `test/static.sh` fails if a literal
-  tagged image appears in the template.
-- **no honest cross-OS default exists.** A native fleet may be
-  linux/darwin/windows on amd64/arm64. Pretending a Linux image runs natively
-  on a Windows or macOS node would be a lie, so the target `kubernetes.io/os`
-  and `kubernetes.io/arch` are explicit parameters and the artifact that runs
-  there is yours to supply. This ships as a *template plus a tested structure*,
-  not as a turnkey command.
+- `dhnt.io/native-process` is a marker image. vk-native does not pull an OCI
+  filesystem or execute a binary from one.
+- The URL must use HTTPS (loopback HTTP is allowed for a locally controlled
+  source), and the SHA-256 covers the complete downloaded archive.
+- The member path selects one regular executable from a `.tar.gz`, `.tgz`, or
+  `.zip` archive. The backend rejects missing tuple members, unsafe paths,
+  checksum mismatches, transport downgrades, and unsupported archives.
+- A native fleet may be linux/darwin/windows on amd64/arm64. The explicit
+  `target-os` and `target-arch` must match the supplied executable. This ships
+  as a *template plus a tested structure*, not as a turnkey command.
+
+`test/fixtures/native-artifact.parameters.yaml` shows the complete parameter
+shape. Replace every example value with the immutable release artifact for the
+selected OS and architecture before submission.
 
 The virtual-kubelet taint key is the `vk-taint-key` parameter (default
 `virtual-kubelet.io/provider`); override it with a non-empty Kubernetes taint

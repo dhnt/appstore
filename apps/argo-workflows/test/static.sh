@@ -324,9 +324,15 @@ if smoke_path.exists():
     ck("kubectl logs" not in raw and "kubectl exec" not in raw and "\nlog:" not in raw,
        "smoke: vk-native supports neither logs nor exec — the workflow must not depend on them")
 
-    # --- 6c. Required, digest-pinned image parameter ---
+    # --- 6c. Required native executable inputs ---
     params = {p["name"]: p for p in (dig(wspec, "arguments", "parameters") or [])}
-    for required in ("job-image", "job-command"):
+    native_inputs = (
+        "job-command",
+        "native-artifact-url",
+        "native-artifact-sha256",
+        "native-artifact-path",
+    )
+    for required in native_inputs:
         ck(required in params, f"smoke: parameter {required!r} must be declared")
         ck("value" not in params.get(required, {"value": None}),
            f"smoke: parameter {required!r} must have NO default — it is a required submit-time "
@@ -342,13 +348,37 @@ if smoke_path.exists():
        and re.fullmatch(r"[1-9]\d*", str(deadline_default)) is not None,
        "smoke: parameter 'job-active-deadline-seconds' must have a positive integer default")
 
-    # --- 6d. The Job manifest: exactly the vk-native envelope ---
+    fixture_path = APP / "test/fixtures/native-artifact.parameters.yaml"
+    ck(fixture_path.exists(), "smoke: native-artifact parameter fixture is missing")
+    fixture = load("test/fixtures/native-artifact.parameters.yaml") if fixture_path.exists() else {}
+    fixture = fixture or {}
+    for required in native_inputs:
+        ck(bool(str(fixture.get(required, "")).strip()),
+           f"smoke fixture: {required!r} must be non-empty")
+    ck(re.fullmatch(r"[0-9a-f]{64}", str(fixture.get("native-artifact-sha256", ""))) is not None,
+       "smoke fixture: native-artifact-sha256 must be exactly 64 lowercase hex characters")
+    ck(str(fixture.get("native-artifact-url", "")).startswith("https://"),
+       "smoke fixture: native-artifact-url must demonstrate verified HTTPS transport")
+    ck("example.invalid" in str(fixture.get("native-artifact-url", "")),
+       "smoke fixture: the example must stay deliberately non-runnable")
+
+    # --- 6d. The Job manifest: actual artifact contract + vk-native envelope ---
     manifest_raw = res.get("manifest") or ""
-    ck("{{workflow.parameters.job-image}}" in manifest_raw,
-       "smoke: the Job image must come from the required job-image parameter, never a literal "
-       "mutable tag")
-    ck(not re.search(r"image:\s*[\"']?[\w./-]+:[\w.-]+[\"']?\s*$", manifest_raw, re.M),
-       "smoke: no literal tagged image may appear — submit-time values must be digest-pinned")
+    ck(re.search(r"^\s*image:\s*dhnt\.io/native-process\s*$", manifest_raw, re.M) is not None,
+       "smoke: vk-native must use the dhnt.io/native-process marker image")
+    ck(re.search(r"^\s*imagePullPolicy:\s*Never\s*$", manifest_raw, re.M) is not None,
+       "smoke: the marker image must never trigger an OCI pull")
+    native_annotations = {
+        "outpost.dhnt.io/native-artifact-url": "{{workflow.parameters.native-artifact-url}}",
+        "outpost.dhnt.io/native-artifact-sha256": "{{workflow.parameters.native-artifact-sha256}}",
+        "outpost.dhnt.io/native-artifact-path": "{{workflow.parameters.native-artifact-path}}",
+    }
+    for annotation, expression in native_annotations.items():
+        ck(re.search(r"^\s*" + re.escape(annotation) + r':\s*["\']?'
+                     + re.escape(expression) + r'["\']?\s*$', manifest_raw, re.M) is not None,
+           f"smoke: pod annotation {annotation!r} must come from its required workflow parameter")
+    ck("job-image" not in raw,
+       "smoke: job-image is not a vk-native delivery mechanism and must not be exposed")
 
     deadline_expr = (
         "{{=asInt(workflow.parameters['job-active-deadline-seconds']) > 0 ? "
@@ -468,6 +498,10 @@ if smoke_path.exists():
            "smoke: automountServiceAccountToken must be false — the default SA token is a "
            "projected volume, which vk-native cannot mount")
         for c in containers:
+            ck(c.get("image") == "dhnt.io/native-process",
+               "smoke: container image is a vk-native marker, not an OCI payload")
+            ck(c.get("imagePullPolicy") == "Never",
+               "smoke: vk-native marker must use imagePullPolicy Never")
             ck(not c.get("envFrom"), "smoke: vk-native supports no envFrom")
             ck(not c.get("volumeMounts"), "smoke: vk-native supports no volumeMounts")
             ck(all("value" in e and "valueFrom" not in e for e in (c.get("env") or [])),

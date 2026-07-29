@@ -1,0 +1,12 @@
+# Example `argo submit --parameter-file` values for the vk-native indirection
+# smoke. This is a contract fixture, not a runnable release: example.invalid
+# deliberately prevents an operator from accidentally executing an unreviewed
+# binary. Replace the URL, digest, member, command, OS and architecture as one
+# reviewed tuple.
+native-artifact-url: https://example.invalid/releases/tool-linux-arm64.tar.gz
+native-artifact-sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+native-artifact-path: tool
+job-command: '["tool","smoke"]'
+target-os: linux
+target-arch: arm64
+job-active-deadline-seconds: "600"
