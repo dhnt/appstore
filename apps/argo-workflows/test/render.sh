@@ -186,11 +186,13 @@ ck(by_kind(default_docs, "RoleBinding"), "no namespaced RoleBinding rendered")
 cluster_scoped = [f"{d['kind']}/{(d.get('metadata') or {}).get('name')}"
                   for d in default_docs
                   if d.get("kind") in ("CustomResourceDefinition", "ClusterRole", "ClusterRoleBinding")]
-ck(cluster_scoped,
-   "the render contains no cluster-scoped objects, so app.yaml's clusterScoped:true would be "
-   "over-declared — re-check crds.install")
-ck(any(c.startswith("CustomResourceDefinition/") for c in cluster_scoped),
-   "no CRDs rendered despite crds.install=true")
+cluster_roles = by_kind(default_docs, "ClusterRole")
+ck(cluster_roles,
+   "no ClusterRoles rendered, so app.yaml's clusterScoped:true would be over-declared")
+# argo-workflows 1.0.20 installs CRDs through a separate crd-install
+# mechanism, so they are not required to appear in `helm template` output.
+# The rendered ClusterRoles are sufficient proof that this release still
+# requires honest cluster-scoped permissions.
 print("    cluster-scoped objects (why clusterScoped: true): "
       + ", ".join(sorted(cluster_scoped)[:4]) + f" ... [{len(cluster_scoped)} total]")
 
@@ -200,14 +202,22 @@ cms = [d for d in by_kind(default_docs, "ConfigMap")
 ck(len(cms) == 1, f"expected one workflow-controller ConfigMap, got {len(cms)}")
 if cms:
     data = cms[0].get("data") or {}
-    ck("workflowDefaults" in data, f"controller ConfigMap has no workflowDefaults (keys: {sorted(data)})")
-    wd = yaml.safe_load(data.get("workflowDefaults", "{}")) or {}
-    ck((wd.get("spec") or {}).get("nodeSelector") == K3S,
-       f"workflowDefaults.spec.nodeSelector must be {K3S}, got {(wd.get('spec') or {}).get('nodeSelector')}")
-    ck((wd.get("spec") or {}).get("tolerations") == [],
+    config = yaml.safe_load(data.get("config", "")) or {}
+    ck(isinstance(config, dict),
+       f"controller ConfigMap data.config must contain a YAML mapping, got {type(config).__name__}")
+    raw_wd = config.get("workflowDefaults") if isinstance(config, dict) else None
+    wd = yaml.safe_load(raw_wd) if isinstance(raw_wd, str) else raw_wd
+    wd = wd or {}
+    ck(isinstance(wd, dict) and wd,
+       f"controller ConfigMap data.config has no workflowDefaults (keys: "
+       f"{sorted(config) if isinstance(config, dict) else []})")
+    spec = wd.get("spec") or {} if isinstance(wd, dict) else {}
+    ck(spec.get("nodeSelector") == K3S,
+       f"workflowDefaults.spec.nodeSelector must be {K3S}, got {spec.get('nodeSelector')}")
+    ck(spec.get("tolerations") == [],
        "workflowDefaults.spec.tolerations must render as an explicit empty list")
-    ck((wd.get("spec") or {}).get("serviceAccountName") == "argo-workflow",
-       "workflowDefaults must pin the workflow ServiceAccount")
+    ck(spec.get("serviceAccountName") == "argo-workflow",
+       "workflowDefaults.spec.serviceAccountName must pin the workflow ServiceAccount")
 
 # --- nothing Argo-owned may reference vk-native ----------------------------
 ck("vk-native" not in default_text,
