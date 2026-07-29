@@ -9,15 +9,52 @@
 #   http://seaweedfs-s3.seaweedfs-system.svc.cluster.local:8333  (S3-compatible API)
 #   http://seaweedfs-filer.seaweedfs-system.svc.cluster.local:8888 (filer HTTP)
 #
-# Pachyderm's bundle (Phase 4) points at the S3 endpoint above as its
-# object-storage backend. ML workloads can use boto3/aws-sdk against
-# the same endpoint with credentials below.
+# ML workloads can use boto3/aws-sdk against the S3 endpoint. Credentials
+# are deliberately not part of this public bundle. Before installing it,
+# create this operator-owned Secret:
 #
-# Default credentials (CHANGE BEFORE PROD USE):
-#   accessKey: admin
-#   secretKey: change-me-on-install
-# Rotate by editing the seaweedfs-s3-config ConfigMap and bouncing the
-# StatefulSet.
+#   namespace: seaweedfs-system
+#   Secret:    seaweedfs-s3-config
+#   key:       s3.json
+#
+# `s3.json` must be a SeaweedFS S3 identity document. The following explicit
+# bootstrap generates high-entropy credentials locally, applies only the
+# Secret to the cluster, and leaves no credential material in this repo:
+#
+#   kubectl create namespace seaweedfs-system \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#   seaweed_config="$(mktemp)"
+#   trap 'rm -f "${seaweed_config}"' EXIT
+#   chmod 0600 "${seaweed_config}"
+#   seaweed_access_key="$(openssl rand -hex 16)"
+#   seaweed_secret_key="$(openssl rand -hex 32)"
+#   printf '{"identities":[{"name":"dks-artifacts","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}\n' \
+#     "${seaweed_access_key}" "${seaweed_secret_key}" >"${seaweed_config}"
+#   kubectl -n seaweedfs-system create secret generic seaweedfs-s3-config \
+#     --from-file=s3.json="${seaweed_config}" --dry-run=client -o yaml \
+#     | kubectl apply -f -
+#   unset seaweed_access_key seaweed_secret_key
+#   rm -f "${seaweed_config}"
+#   trap - EXIT
+#
+# Import the credentials from the resulting Secret into the dhnt secrets
+# vault (or another operator-controlled secret manager). Retrieve them only
+# when needed with:
+#
+#   kubectl -n seaweedfs-system get secret seaweedfs-s3-config \
+#     -o jsonpath='{.data.s3\.json}' | base64 --decode
+#
+# Existing operators may instead supply their own valid `s3.json` Secret.
+# Rotate by replacing the Secret and restarting the StatefulSet:
+#
+#   kubectl rollout restart statefulset/seaweedfs -n seaweedfs-system
+#
+# Installation fails closed when the Secret is absent: Kubernetes leaves the
+# pod Pending rather than starting SeaweedFS with a public/default identity.
+#
+# Placement boundary: storage runs only on a Linux, real-k3s DKS node.
+# vk-native/vk-podman nodes are execution adapters, not durable Kubernetes
+# storage hosts. This pod has no vk toleration or scheduling fallback.
 #
 # Pinned to chrislusf/seaweedfs:3.71 — known-good. Bump cadence:
 # every 6 months, after a smoke on a dev cluster.
@@ -33,34 +70,6 @@ metadata:
   labels:
     outpost.dhnt.io/managed: "true"
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: seaweedfs-s3-config
-  namespace: seaweedfs-system
-data:
-  # Two identities: anonymous (read-only listing, handy for public ML
-  # datasets) and admin (full access). Pachyderm + Kubeflow pipelines
-  # use the admin credential; rotate it by editing this ConfigMap and
-  # rolling out the StatefulSet (`kubectl rollout restart sts/seaweedfs
-  # -n seaweedfs-system`).
-  s3.json: |
-    {
-      "identities": [
-        {
-          "name": "anonymous",
-          "actions": ["Read", "List"]
-        },
-        {
-          "name": "admin",
-          "credentials": [
-            {"accessKey": "admin", "secretKey": "change-me-on-install"}
-          ],
-          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
-        }
-      ]
-    }
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -69,6 +78,11 @@ metadata:
 spec:
   serviceName: seaweedfs
   replicas: 1
+  # StatefulSet deletion or an accidental scale-down must not garbage collect
+  # the artifact store. PVC removal remains a separate, explicit operation.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   selector:
     matchLabels:
       app: seaweedfs
@@ -77,6 +91,11 @@ spec:
       labels:
         app: seaweedfs
     spec:
+      # Required placement, not a preference: never fall through to a virtual
+      # kubelet backend when no real-k3s Linux node is available.
+      nodeSelector:
+        kubernetes.io/os: linux
+        outpost.dhnt.io/backend: k3s
       containers:
       - name: weed
         image: chrislusf/seaweedfs:3.71
@@ -133,8 +152,12 @@ spec:
             memory: 4Gi
       volumes:
       - name: config
-        configMap:
+        secret:
           name: seaweedfs-s3-config
+          items:
+          - key: s3.json
+            path: s3.json
+            mode: 0400
   volumeClaimTemplates:
   - metadata:
       name: data
