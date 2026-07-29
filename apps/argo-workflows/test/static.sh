@@ -171,6 +171,39 @@ ck("preferredDuringScheduling" not in values_text,
 ck(not re.search(r"^\s*[^#\n]*vk-native", values_text, re.M),
    "values.yaml: no uncommented reference to vk-native may appear — Argo pods never run there")
 
+# workflowDefaults are defaults, not an admission policy. Argo applies them only
+# where a submitted Workflow/Template has not supplied its own value; a user's
+# nodeSelector/tolerations therefore take precedence over the catalog defaults.
+# The placement claim above says every Argo-owned workflow pod is hard-pinned to
+# k3s, so the package must include some non-defaulting enforcement before this
+# can be true for hostile or mistaken submissions.
+adversarial_selector = {"outpost.dhnt.io/backend": "vk-native", "kubernetes.io/os": "linux"}
+merged_selector = dict(dig(values, "controller", "workflowDefaults", "spec", "nodeSelector") or {})
+merged_selector.update(adversarial_selector)
+adversarial_tolerations = [{"key": "virtual-kubelet.io/provider", "operator": "Exists", "effect": "NoSchedule"}]
+merged_tolerations = adversarial_tolerations
+policy_kinds = {
+    "ValidatingAdmissionPolicy",
+    "ValidatingWebhookConfiguration",
+    "ConstraintTemplate",
+    "K8sRequiredLabels",
+}
+enforcement_docs = []
+for f in sorted(list(APP.rglob("*.yaml")) + list((APP / "smoke").rglob("*.yaml"))):
+    try:
+        enforcement_docs.extend(d for d in yaml.safe_load_all(f.read_text()) if isinstance(d, dict))
+    except yaml.YAMLError:
+        pass
+has_non_defaulting_placement_enforcement = any(d.get("kind") in policy_kinds for d in enforcement_docs)
+ck(
+    has_non_defaulting_placement_enforcement
+    or (merged_selector == K3S and merged_tolerations == []),
+    "values.yaml: controller.workflowDefaults is overrideable by submitted Workflows, so it does "
+    "not hard-pin every Argo-owned workflow pod to k3s. An adversarial Workflow can set "
+    f"spec.nodeSelector={adversarial_selector} and tolerations={adversarial_tolerations}, yielding "
+    f"effective nodeSelector={merged_selector} without any admission policy in this package to reject it"
+)
+
 # ===========================================================================
 # 4. No embedded credentials anywhere in the app entry
 # ===========================================================================
