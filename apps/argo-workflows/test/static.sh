@@ -309,6 +309,10 @@ if smoke_path.exists():
         # no fallback in time
         ck(jspec.get("backoffLimit") == 0,
            "smoke: backoffLimit must be 0 — a retry is a fallback onto another node")
+        ck(isinstance(jspec.get("activeDeadlineSeconds"), int) and jspec.get("activeDeadlineSeconds") > 0,
+           "smoke: Job spec.activeDeadlineSeconds must be set — an unschedulable vk-native "
+           "payload remains Pending without incrementing status.failed, so the resource watch "
+           "can otherwise wait forever instead of failing closed")
         ck(jspec.get("completions") == 1 and jspec.get("parallelism") == 1,
            "smoke: completions and parallelism must both be 1")
         ck(pspec.get("restartPolicy") == "Never", "smoke: Job pod restartPolicy must be Never")
