@@ -29,15 +29,60 @@ singleNamespace: true
 
 # CRDs. `keep: true` means a `helm uninstall` does NOT delete the CRDs (and
 # therefore does not cascade-delete every Workflow object on the cluster).
-# Flip `install` to false for the admin-preinstalled-CRDs mode; see README.
+#
+# Chart 1.0.20's full=true path is a pre-install Job that fetches CRDs from
+# mutable-tag raw.githubusercontent.com URLs with no content digest. Use the
+# minimal CRDs embedded in the sha256-pinned chart archive instead. They retain
+# unknown fields but omit the full OpenAPI validation schema; see README.
+# Flip `install` to false for the admin-preinstalled full-CRD mode.
 crds:
   install: true
   keep: true
+  full: false
 
 # Do not extend the built-in view/edit/admin ClusterRoles with Argo verbs.
 # Aggregated roles are a cluster-wide side effect that a per-user app install
 # has no business creating.
 createAggregateRoles: false
+
+# argo-workflows 1.0.20 has a singleNamespace rendering defect: it emits these
+# ClusterRoleBindings but suppresses their referenced ClusterRoles. Supply the
+# minimum documented read permissions under the exact templated names the
+# bindings expect. No editing verbs and no aggregate-role mutation.
+extraObjects:
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: '{{ template "argo-workflows.controller.fullname" . }}-cluster-template'
+      labels:
+        app.kubernetes.io/instance: '{{ .Release.Name }}'
+        app.kubernetes.io/managed-by: '{{ .Release.Service }}'
+        app.kubernetes.io/part-of: argo-workflows
+    rules:
+      - apiGroups: [argoproj.io]
+        resources: [clusterworkflowtemplates, clusterworkflowtemplates/finalizers]
+        verbs: [get, list, watch]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: '{{ template "argo-workflows.server.fullname" . }}-cluster-template'
+      labels:
+        app.kubernetes.io/instance: '{{ .Release.Name }}'
+        app.kubernetes.io/managed-by: '{{ .Release.Service }}'
+        app.kubernetes.io/part-of: argo-workflows
+    rules:
+      - apiGroups: [argoproj.io]
+        resources: [clusterworkflowtemplates, clusterworkflowtemplates/finalizers]
+        verbs: [get, list, watch]
+
+# Bound Argo's init/wait executor containers explicitly. Without this, a tenant
+# LimitRange can silently assign 500m or 1 CPU to each generated executor
+# container and quota-block small fan-outs. User/main-container resources remain
+# the Workflow author's responsibility and are not defaulted here.
+executor:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 100m, memory: 128Mi }
 
 # ---------------------------------------------------------------------------
 # Workflow controller

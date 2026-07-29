@@ -45,10 +45,27 @@ asserts the declaration matches what the chart actually renders.
 
 ### Two install modes
 
-| Mode | `crds.install` | Who can install | Notes |
+| Mode | CRD values | Who can install | Notes |
 |---|---|---|---|
-| **Default** | `true` | cloudbox-admin (clusterScoped gate) | first install on a cluster; `crds.keep: true` so uninstall never cascade-deletes Workflow objects |
-| **CRDs pre-applied** | `false` | any user with namespace rights | an admin applies the CRDs cluster-wide once; subsequent per-user installs create only namespaced objects |
+| **Secure default** | `install: true`, `full: false`, `keep: true` | cloudbox-admin (clusterScoped gate) | Installs the minimal CRDs embedded in the sha256-pinned chart archive. Uninstall retains them and cannot cascade-delete Workflow objects. |
+| **Full CRDs pre-applied** | `install: false` | admin preflight, then namespace installer | An admin obtains the exact full CRDs through a separately pinned, digest-verified process and applies them cluster-wide; the per-user release does not run a CRD hook. |
+
+Chart `1.0.20` implements `crds.full=true` with a pre-install/pre-upgrade Job
+that downloads eight files from `raw.githubusercontent.com` under a mutable Git
+tag. The chart archive checksum does not authenticate those later responses.
+The package therefore sets `full: false` and renders no remote CRD hook.
+
+The embedded minimal CRD set uses `x-kubernetes-preserve-unknown-fields` for
+large Argo object sections: the API server stores the complete object, but the
+set provides less field-by-field OpenAPI validation than the full CRDs.
+Operators who require full schema validation must pre-apply full CRDs whose
+bytes and digest are pinned independently, then install with
+`crds.install=false`. Do not override `full=true` directly in this package.
+
+Chart `1.0.20` also emits ClusterRoleBindings for ClusterWorkflowTemplate access
+in `singleNamespace` mode while suppressing their referenced ClusterRoles.
+`values.yaml` supplies the two missing roles through `extraObjects`, with only
+`get/list/watch` on ClusterWorkflowTemplates and their finalizers.
 
 ## Placement boundaries
 
@@ -74,6 +91,12 @@ submissions must add an external admission policy (for example, a cluster
 `ValidatingAdmissionPolicy` or an existing policy engine) that rejects
 disallowed workflow placement. No admission controller or policy is bundled
 with this package.
+
+Argo's generated init/wait executor containers have explicit small resource
+requests and limits in `values.yaml`. This prevents tenant LimitRanges from
+silently assigning 500m or 1 CPU per generated container and quota-blocking a
+small fan-out. The package deliberately does not default resources for the
+user's main container; each Workflow author remains responsible for those.
 
 The placement matters because vk-native provides *exactly one container,
 literal env, and no init containers, sidecars, `envFrom`, projected secrets,
@@ -203,7 +226,7 @@ never a silent skip. Neither touches a cluster.
 | Script | Needs | Checks |
 |---|---|---|
 | `test/static.sh` | `python3` + PyYAML | catalog/schema invariants, chart-pin drift across `app.yaml` / `README.md` / `test/render.sh`, the CRD↔`clusterScoped` honesty rule, no inline credentials, the full vk-native indirection + no-fallback contract |
-| `test/render.sh` | `helm` 3.x (or `HELM_BIN=…`), `python3` + PyYAML, network | fetches the exact pinned chart into a temp dir, verifies its sha256 against `test/chart.sha256`, renders twice (defaults, and with archive + S3 enabled), asserts controller / server / RBAC / ConfigMap output |
+| `test/render.sh` | `helm` 3.x (or `HELM_BIN=…`), `python3` + PyYAML, network | fetches the exact pinned chart into a temp dir, verifies its sha256 against `test/chart.sha256`, renders twice (defaults, and with archive + S3 enabled), and rejects remote CRD hooks, dangling ClusterWorkflowTemplate bindings, or unbounded executor resources |
 
 `test/render.sh` never mutates your Helm config (it points
 `HELM_{CACHE,CONFIG,DATA}_HOME` into its temp dir) and removes everything it

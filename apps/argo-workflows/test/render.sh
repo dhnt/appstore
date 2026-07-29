@@ -9,8 +9,10 @@
 #   * the ServiceAccounts and namespaced RBAC named in ../values.yaml exist;
 #   * the workflow-controller ConfigMap carries the k3s workflowDefaults used
 #     as defense in depth when a submission does not override placement;
-#   * the cluster-scoped objects the chart really creates are present, which is
-#     what makes app.yaml's `clusterScoped: true` the honest declaration;
+#   * the digest-covered embedded CRDs render with keep semantics and no remote
+#     GitHub install hook;
+#   * every ClusterWorkflowTemplate binding resolves to a minimal read role;
+#   * generated Argo executor containers have explicit bounded resources;
 #   * with test/fixtures/enabled.values.yaml the workflow archive and the
 #     S3-compatible artifact repository wire up to Secret REFERENCES, with no
 #     credential material anywhere in the render.
@@ -182,17 +184,58 @@ for want in ("argo-workflows-controller", "argo-workflows-server", "argo-workflo
 ck(by_kind(default_docs, "Role"), "no namespaced Role rendered")
 ck(by_kind(default_docs, "RoleBinding"), "no namespaced RoleBinding rendered")
 
-# --- honesty: the chart really does create cluster-scoped objects ----------
+# --- secure CRDs + complete ClusterWorkflowTemplate RBAC -------------------
 cluster_scoped = [f"{d['kind']}/{(d.get('metadata') or {}).get('name')}"
                   for d in default_docs
                   if d.get("kind") in ("CustomResourceDefinition", "ClusterRole", "ClusterRoleBinding")]
 cluster_roles = by_kind(default_docs, "ClusterRole")
 ck(cluster_roles,
    "no ClusterRoles rendered, so app.yaml's clusterScoped:true would be over-declared")
-# argo-workflows 1.0.20 installs CRDs through a separate crd-install
-# mechanism, so they are not required to appear in `helm template` output.
-# The rendered ClusterRoles are sufficient proof that this release still
-# requires honest cluster-scoped permissions.
+crds = by_kind(default_docs, "CustomResourceDefinition")
+expected_crds = {
+    "clusterworkflowtemplates.argoproj.io",
+    "cronworkflows.argoproj.io",
+    "workflowartifactgctasks.argoproj.io",
+    "workfloweventbindings.argoproj.io",
+    "workflows.argoproj.io",
+    "workflowtaskresults.argoproj.io",
+    "workflowtasksets.argoproj.io",
+    "workflowtemplates.argoproj.io",
+}
+crd_names = {(d.get("metadata") or {}).get("name") for d in crds}
+ck(crd_names == expected_crds,
+   f"default render must contain exactly the 8 chart-bundled CRDs, got {sorted(crd_names)}")
+for d in crds:
+    name = (d.get("metadata") or {}).get("name")
+    annotations = (d.get("metadata") or {}).get("annotations") or {}
+    ck(annotations.get("helm.sh/resource-policy") == "keep",
+       f"{name}: CRD must carry helm.sh/resource-policy=keep")
+ck(not named(default_docs, "Job", "crd-install"),
+   "default render contains the remote full-CRD install Job")
+ck("raw.githubusercontent.com" not in default_text,
+   "default render references an undigested raw GitHub CRD source")
+
+roles_by_name = {
+    (d.get("metadata") or {}).get("name"): d for d in by_kind(default_docs, "ClusterRole")
+}
+cwt_bindings = [
+    d for d in by_kind(default_docs, "ClusterRoleBinding")
+    if (d.get("roleRef") or {}).get("name", "").endswith("-cluster-template")
+]
+ck(len(cwt_bindings) == 2,
+   f"expected controller+server CWT ClusterRoleBindings, got {len(cwt_bindings)}")
+for binding in cwt_bindings:
+    bname = (binding.get("metadata") or {}).get("name")
+    ref = (binding.get("roleRef") or {}).get("name")
+    role = roles_by_name.get(ref)
+    ck(role is not None, f"{bname}: dangling roleRef {ref!r}")
+    if role:
+        rules = role.get("rules") or []
+        ck(len(rules) == 1
+           and set(rules[0].get("resources") or [])
+               == {"clusterworkflowtemplates", "clusterworkflowtemplates/finalizers"}
+           and set(rules[0].get("verbs") or []) == {"get", "list", "watch"},
+           f"{ref}: must grant only get/list/watch on CWTs and finalizers")
 print("    cluster-scoped objects (why clusterScoped: true): "
       + ", ".join(sorted(cluster_scoped)[:4]) + f" ... [{len(cluster_scoped)} total]")
 
@@ -222,6 +265,15 @@ if cms:
     ck(isinstance(retry_limit, int) and retry_limit == 2,
        f"workflowDefaults.spec.retryStrategy.limit must render as integer 2, "
        f"got {retry_limit!r} ({type(retry_limit).__name__})")
+    executor = config.get("executor") or {}
+    if isinstance(executor, str):
+        executor = yaml.safe_load(executor) or {}
+    resources = executor.get("resources") or {} if isinstance(executor, dict) else {}
+    requests, limits = resources.get("requests") or {}, resources.get("limits") or {}
+    ck(requests.get("cpu") == "10m" and requests.get("memory") == "32Mi",
+       f"controller ConfigMap executor requests are missing/unbounded: {requests}")
+    ck(limits.get("cpu") == "100m" and limits.get("memory") == "128Mi",
+       f"controller ConfigMap executor limits are missing/unbounded: {limits}")
 
 # --- the package's default chart configuration must not target vk-native ----
 ck("vk-native" not in default_text,

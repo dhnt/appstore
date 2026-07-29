@@ -140,10 +140,29 @@ ck(dig(spec, "rbac", "clusterScoped") is True or crds_install is False,
 ck(dig(values, "crds", "keep") is True,
    "values.yaml: crds.keep must be true — otherwise `helm uninstall` cascade-deletes every "
    "Workflow object on the cluster")
+ck(dig(values, "crds", "full") is False,
+   "values.yaml: crds.full must be false — chart 1.0.20's full-CRD hook downloads mutable-tag "
+   "raw GitHub files outside the pinned chart digest")
 ck(values.get("createAggregateRoles") is False,
    "values.yaml: createAggregateRoles must be false — a per-user install must not mutate the "
    "cluster's aggregated view/edit/admin ClusterRoles")
 ck(values.get("singleNamespace") is True, "values.yaml: singleNamespace must be true")
+
+extra = values.get("extraObjects") or []
+cwt_roles = [d for d in extra if isinstance(d, dict) and d.get("kind") == "ClusterRole"]
+ck(len(cwt_roles) == 2,
+   f"values.yaml: extraObjects must supply exactly two missing CWT ClusterRoles, got {len(cwt_roles)}")
+for role in cwt_roles:
+    name = dig(role, "metadata", "name", default="")
+    rules = role.get("rules") or []
+    ck(name.endswith("-cluster-template")
+       and ("controller.fullname" in name or "server.fullname" in name),
+       f"values.yaml: CWT role name must use the chart's exact controller/server fullname, got {name!r}")
+    ck(len(rules) == 1
+       and set(rules[0].get("resources") or [])
+           == {"clusterworkflowtemplates", "clusterworkflowtemplates/finalizers"}
+       and set(rules[0].get("verbs") or []) == {"get", "list", "watch"},
+       f"values.yaml: CWT role {name!r} must grant only get/list/watch on templates+finalizers")
 
 # ===========================================================================
 # 3. Placement: explicit package pods plus defense-in-depth workflow defaults
@@ -164,7 +183,19 @@ for where, tol in (
     ck(tol == [], f"values.yaml: {where}.tolerations must be explicitly [] — any virtual-kubelet "
                   "toleration readmits the failure mode the nodeSelector rules out")
 
+executor_resources = dig(values, "executor", "resources", default={}) or {}
+executor_requests = executor_resources.get("requests") or {}
+executor_limits = executor_resources.get("limits") or {}
+ck(executor_requests.get("cpu") and executor_requests.get("memory"),
+   "values.yaml: executor.resources.requests must bound generated Argo init/wait containers")
+ck(executor_limits.get("cpu") and executor_limits.get("memory"),
+   "values.yaml: executor.resources.limits must prevent tenant LimitRange defaults")
+ck(dig(values, "controller", "workflowDefaults", "spec", "resources") is None,
+   "values.yaml: user/main-container resources remain the Workflow author's responsibility")
+
 values_text = uncommented((APP / "values.yaml").read_text())
+ck("raw.githubusercontent.com" not in values_text,
+   "values.yaml: active configuration must not enable an undigested remote CRD source")
 ck("preferredDuringScheduling" not in values_text,
    "values.yaml: soft (preferred) affinity is forbidden — placement must be a hard requirement "
    "with no fallback")
@@ -210,6 +241,15 @@ for needle in (
 ):
     ck(needle in readme_text,
        f"README.md: placement boundary must explicitly document {needle!r}")
+for needle in (
+    "crds.full=true",
+    "raw.githubusercontent.com",
+    "x-kubernetes-preserve-unknown-fields",
+    "separately pinned, digest-verified",
+    "user's main container",
+):
+    ck(needle in readme_text,
+       f"README.md: secure CRD/executor boundary must document {needle!r}")
 values_comments = " ".join(
     line.lstrip()[1:].strip() for line in (APP / "values.yaml").read_text().splitlines()
     if line.lstrip().startswith("#")
