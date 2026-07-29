@@ -190,6 +190,119 @@ ck(
 )
 
 # ===========================================================================
+# PROBE 6 — deadline safety net can be silently disabled at submission time
+#
+# The activeDeadlineSeconds field is what makes an unschedulable vk-native
+# payload fail closed instead of sitting Pending forever.  asInt correctly
+# converts the parameter to an integer, but asInt("0") → 0, and
+# activeDeadlineSeconds: 0 tells Kubernetes "no deadline."  A submitter who
+# passes -p job-active-deadline-seconds=0 removes the safety net, and the
+# template has no guard against non-positive values.
+#
+# PROBE 5 verifies the toolchain boundary; this probe verifies the runtime
+# boundary — the one the smoke template leaves unguarded.
+# ===========================================================================
+deadline_expr = "{{=asInt(workflow.parameters['job-active-deadline-seconds'])}}"
+
+zero_passing = True
+zero_details = []
+for test_val in ("0", "-1"):
+    if not manifest_raw or deadline_expr not in manifest_raw:
+        zero_details.append(f"    precondition absent: manifest={bool(manifest_raw)}, expr_found={deadline_expr in manifest_raw}")
+        zero_passing = True
+        break
+    subbed = manifest_raw.replace(
+        "{{workflow.parameters.job-command}}", '["/bin/true"]'
+    )
+    subbed = subbed.replace(deadline_expr, str(int(test_val)))
+    subbed = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", subbed)
+    try:
+        job = yaml.safe_load(subbed)
+        ads = job.get("spec", {}).get("activeDeadlineSeconds")
+        if not isinstance(ads, int) or ads <= 0:
+            zero_passing = False
+            zero_details.append(
+                f"    {test_val!r} -> activeDeadlineSeconds={ads!r}: "
+                f"Kubernetes treats a non-positive deadline as 'no deadline', "
+                f"so the vk-native safety net is silently disabled"
+            )
+    except yaml.YAMLError as e:
+        zero_passing = False
+        zero_details.append(f"    {test_val!r} -> YAML parse error: {e}")
+
+ck(
+    zero_passing,
+    "deadline: non-positive input silently disables the vk-native safety net",
+    f"  The smoke template depends on a positive activeDeadlineSeconds to\n"
+    f"  fail closed when the vk-native payload cannot be scheduled.\n"
+    f"  asInt handles octal correctly but does not — and cannot — reject\n"
+    f"  zero or negative values. The template must either:\n"
+    f"    a) guard the parameter value with an expression that enforces > 0, or\n"
+    f"    b) document that zero disables the deadline and accept the contract gap\n"
+    + "\n".join(zero_details),
+)
+
+# ===========================================================================
+# PROBE 7 — empty vk-taint-key silently tolerates ALL NoSchedule taints
+#
+# The parameter vk-taint-key has a default of "virtual-kubelet.io/provider"
+# but no validation.  A submitter who passes -p vk-taint-key="" gets:
+#
+#   tolerations:
+#     - key: ""
+#       operator: Exists
+#       effect: NoSchedule
+#
+# In Kubernetes, a toleration with operator=Exists and an empty key matches
+# EVERY taint of the given effect.  This means the payload pod can land on
+# any node, silently breaking the hard-placement, no-fallback contract that
+# is the entire purpose of the smoke WorkflowTemplate.
+# ===========================================================================
+empty_key_passing = True
+empty_key_details = []
+for test_val in ("",):
+    if not manifest_raw:
+        empty_key_passing = True
+        empty_key_details.append("    manifest absent — precondition not met")
+        break
+    subbed = manifest_raw
+    subbed = subbed.replace('{{workflow.parameters.job-command}}', '["/bin/true"]')
+    subbed = subbed.replace(deadline_expr, "300")
+    subbed = subbed.replace("{{workflow.parameters.job-image}}", "PLACEHOLDER")
+    subbed = subbed.replace("{{workflow.parameters.target-os}}", "linux")
+    subbed = subbed.replace("{{workflow.parameters.target-arch}}", "amd64")
+    subbed = subbed.replace("{{workflow.parameters.vk-taint-key}}", test_val)
+    subbed = re.sub(r"\{\{[^}]*\}\}", "PLACEHOLDER", subbed)
+    try:
+        job = yaml.safe_load(subbed)
+        pspec = (job.get("spec") or {}).get("template", {}).get("spec") or {}
+        tols = pspec.get("tolerations") or []
+        for tol in tols:
+            k = tol.get("key")
+            op = tol.get("operator")
+            if k == "" and op == "Exists":
+                empty_key_passing = False
+                empty_key_details.append(
+                    f"    vk-taint-key={test_val!r} -> key={k!r} operator={op!r}: "
+                    f"this toleration matches ALL NoSchedule taints, so the "
+                    f"hard-placement, no-fallback contract is silently void"
+                )
+    except yaml.YAMLError as e:
+        empty_key_passing = False
+        empty_key_details.append(f"    vk-taint-key={test_val!r} -> YAML parse error: {e}")
+
+ck(
+    empty_key_passing,
+    "vk-taint: empty key silently tolerates all taints, breaking hard placement",
+    f"  The smoke template depends on a specific vk-taint-key to restrict the\n"
+    f"  payload pod to native nodes.  An empty key with operator=Exists\n"
+    f"  tolerates ALL NoSchedule taints, letting the pod land anywhere.\n"
+    f"  The parameter declaration needs either a minimum-length constraint\n"
+    f"  or the template expression must reject empty input.\n"
+    + "\n".join(empty_key_details),
+)
+
+# ===========================================================================
 # Report
 # ===========================================================================
 print(f"Ran {CHECKS} adversarial probe assertions over {APP}")
