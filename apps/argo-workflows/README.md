@@ -221,11 +221,17 @@ executes only the required HTTPS/SHA-256/member-path tuple through the
 `dhnt.io/native-process` marker.
 
 Apply `smoke/rbac.yaml` once in the workflow namespace; its namespaced Job
-grant is also the dispatcher grant. Required inputs are `k3s-image`,
-`k3s-script`, `target-host`, `job-command`, and the three native artifact
+grant is also the dispatcher grant. Required inputs are immutable
+`k3s-image` (`name@sha256:<64 lowercase hex>`), JSON/YAML argv
+`k3s-command`, `target-host`, `job-command`, and the three native artifact
 parameters. None transports a secret. Native failure propagates through Job
 status, a positive deadline, `backoffLimit: 0`, and the resource template's
 explicit `failureCondition`; there is no log, exec, retry, or backend fallback.
+The k3s command is merged directly into `container.command` with
+`podSpecPatch`; no shell parses or reinterprets workload text. Argo expression
+guards map malformed/empty argv to an invalid Pod patch, mutable images to an
+empty image, and malformed native URL/digest/path inputs to empty required
+fields, making Pod creation or the native backend fail closed.
 
 Output artifact collection is deliberately outside this v1 contract. A native
 payload must publish results to an authenticated endpoint itself, followed by

@@ -65,9 +65,10 @@ spec:
   arguments:
     parameters:
       # REQUIRED OCI workload for the real-k3s phase. It is never copied into
-      # the native Job: vk-native accepts only the verified tuple below.
+      # the native Job. The image must be immutable (`@sha256:` digest), and
+      # command is a JSON/YAML argv sequence, never shell text.
       - name: k3s-image
-      - name: k3s-script
+      - name: k3s-command
       # REQUIRED, no default — a YAML/JSON flow sequence, e.g.
       #   ["bashy","-c","exit 0"]   or   ["bashy.exe","-c","exit 0"]
       # command[0] names the executable for argv purposes; when the three
@@ -108,11 +109,18 @@ spec:
 
     # Ordinary OCI work runs only on a real Linux k3s agent.
     - name: k3s-phase
+      # command is patched as an argv array after parameter rendering. Keeping
+      # it in this block scalar avoids both YAML type coercion and `/bin/sh`.
+      podSpecPatch: |
+        containers:
+          - name: main
+            command: {{=sprig.regexMatch('^[[:space:]]*\[[[:space:]]*"[^"]+"([[:space:]]*,[[:space:]]*"[^"]*")*[[:space:]]*\][[:space:]]*$', workflow.parameters['k3s-command']) ? workflow.parameters['k3s-command'] : 'INVALID'}}
       container:
-        image: "{{workflow.parameters.k3s-image}}"
+        # Empty is API-invalid, so a mutable/malformed image fails before a
+        # workload container exists. Argo v4 expression tags expose Sprig's
+        # RE2 regexMatch.
+        image: "{{=sprig.regexMatch('^.+@sha256:[0-9a-f]{64}$', workflow.parameters['k3s-image']) ? workflow.parameters['k3s-image'] : ''}}"
         imagePullPolicy: IfNotPresent
-        command: ["/bin/sh", "-ceu"]
-        args: ["{{workflow.parameters.k3s-script}}"]
 
     # ---- The indirection itself -----------------------------------------
     # Runs argoexec on a k3s node. Talks to the API server; it never runs a
@@ -156,9 +164,9 @@ spec:
                   # These three annotations, not the marker image below,
                   # deliver the executable to vk-native. All are required:
                   # a partial tuple is rejected by the backend.
-                  outpost.dhnt.io/native-artifact-url: "{{workflow.parameters.native-artifact-url}}"
-                  outpost.dhnt.io/native-artifact-sha256: "{{workflow.parameters.native-artifact-sha256}}"
-                  outpost.dhnt.io/native-artifact-path: "{{workflow.parameters.native-artifact-path}}"
+                  outpost.dhnt.io/native-artifact-url: "{{=sprig.regexMatch('^https://[^[:space:]]+$', workflow.parameters['native-artifact-url']) ? workflow.parameters['native-artifact-url'] : ''}}"
+                  outpost.dhnt.io/native-artifact-sha256: "{{=sprig.regexMatch('^[0-9a-f]{64}$', workflow.parameters['native-artifact-sha256']) ? workflow.parameters['native-artifact-sha256'] : ''}}"
+                  outpost.dhnt.io/native-artifact-path: "{{=sprig.regexMatch('^[A-Za-z0-9_][A-Za-z0-9._/-]*$', workflow.parameters['native-artifact-path']) && !sprig.contains('../', workflow.parameters['native-artifact-path']) && !sprig.hasSuffix('/..', workflow.parameters['native-artifact-path']) ? workflow.parameters['native-artifact-path'] : ''}}"
               spec:
                 restartPolicy: Never
                 # vk-native cannot mount projected volumes, and the default
