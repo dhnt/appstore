@@ -9,9 +9,11 @@
 # kubernetes.default.svc — helm install, kubectl talking to apiserver
 # from a pod, headlamp talking to apiserver, etc. all break.
 #
-# This bundle ships the same Deployment+Service+ConfigMap+RBAC k3s
-# would have applied (CoreDNS v1.12.1 — matches k3s 1.36's pin) so we
-# don't have to wait on the k3s addon path.
+# This bundle ships the same Service+ConfigMap+RBAC k3s would have
+# applied (CoreDNS v1.12.1 — matches k3s 1.36's pin), but runs CoreDNS
+# as one pod per healthy real-k3s node. DKS has to keep DNS available
+# even while cross-node Service routing is degraded: node-local
+# endpoints make that failure mode explicit and bounded.
 #
 # Auto-applied at cluster boot via CLUSTER_AUTO_APPLY_BUNDLES.
 ---
@@ -79,7 +81,7 @@ data:
   NodeHosts: ""
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: coredns
   namespace: kube-system
@@ -87,19 +89,10 @@ metadata:
     k8s-app: kube-dns
     kubernetes.io/name: "CoreDNS"
 spec:
-  # 2 replicas + hostname-topology spread = surviving the loss of any
-  # one node leaves at least one CoreDNS pod serving. Single-node
-  # clusters still work (whenUnsatisfiable: ScheduleAnyway puts both
-  # on the one node).
-  replicas: 2
-  strategy:
+  updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      # Allow at most 1 of the 2 pods to be down at a time so a rolling
-      # update can never take cluster DNS to zero. maxSurge: 1 lets a
-      # third pod come up before the old one terminates.
       maxUnavailable: 1
-      maxSurge: 1
   selector:
     matchLabels:
       k8s-app: kube-dns
@@ -110,30 +103,6 @@ spec:
     spec:
       priorityClassName: "system-cluster-critical"
       serviceAccountName: coredns
-      # Topology spread: one CoreDNS pod per node when possible; fall
-      # back to co-tenancy on single-node clusters (ScheduleAnyway).
-      # maxSkew: 1 means the scheduler picks the least-loaded node for
-      # each new replica without forcing failure if no spread is
-      # possible.
-      topologySpreadConstraints:
-      - maxSkew: 1
-        topologyKey: kubernetes.io/hostname
-        whenUnsatisfiable: ScheduleAnyway
-        labelSelector:
-          matchLabels:
-            k8s-app: kube-dns
-      # Belt-and-suspenders: preferred (not required) pod anti-affinity
-      # also discourages cohabitation. Redundant with topology spread
-      # on multi-node clusters but free to keep.
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  k8s-app: kube-dns
-              topologyKey: kubernetes.io/hostname
       tolerations:
       - key: "CriticalAddonsOnly"
         operator: "Exists"
@@ -145,6 +114,10 @@ spec:
         effect: "NoSchedule"
       nodeSelector:
         kubernetes.io/os: linux
+        # Never place cluster infrastructure on a virtual backend.
+        # A sandbox-broken real node is excluded by the owned
+        # outpost.dhnt.io/runtime-unavailable taint.
+        outpost.dhnt.io/backend: k3s
       containers:
       - name: coredns
         image: rancher/mirrored-coredns-coredns:1.12.1
@@ -218,6 +191,10 @@ metadata:
     kubernetes.io/name: "CoreDNS"
 spec:
   clusterIP: 10.43.0.10
+  # Every eligible real node has a CoreDNS DaemonSet endpoint. Keeping
+  # traffic local avoids silently depending on cross-node ClusterIP
+  # routing for the resolver that is required to diagnose that routing.
+  internalTrafficPolicy: Local
   selector:
     k8s-app: kube-dns
   ports:
@@ -231,12 +208,54 @@ spec:
     port: 9153
     protocol: TCP
 ---
-# PodDisruptionBudget — guarantees at least 1 CoreDNS pod stays up
-# during voluntary disruptions (kubectl drain, eviction during a
-# rolling node-upgrade). With replicas: 2 + maxUnavailable: 1, a
-# drain on one node waits until the second replica is Ready on a
-# different node before letting the first one terminate. Cluster
-# DNS never goes to zero during planned maintenance.
+# A tiny sandbox canary is scheduled on every real-k3s node, including
+# nodes carrying the owned runtime-unavailable taint. Cloudbox observes
+# these pods: failure to reach Ready after the grace period taints and
+# capability-labels the node; a recovered Ready canary removes only that
+# owned taint. The pause image is already the k3s sandbox image, so this
+# probe adds no registry dependency and almost no steady-state cost.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dks-runtime-probe
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: dks-runtime-probe
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dks-runtime-probe
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dks-runtime-probe
+    spec:
+      priorityClassName: "system-node-critical"
+      nodeSelector:
+        kubernetes.io/os: linux
+        outpost.dhnt.io/backend: k3s
+      tolerations:
+      - key: outpost.dhnt.io/runtime-unavailable
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: pause
+        image: rancher/mirrored-pause:3.6
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 1m
+            memory: 1Mi
+          limits:
+            memory: 4Mi
+---
+# The DaemonSet keeps one resolver on every eligible node. This PDB
+# still guards voluntary multi-node disruption from taking all ready
+# resolvers down at once.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
