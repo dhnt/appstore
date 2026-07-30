@@ -114,7 +114,7 @@ spec:
       podSpecPatch: |
         containers:
           - name: main
-            command: {{=sprig.regexMatch('^[[:space:]]*\[[[:space:]]*"[^"]+"([[:space:]]*,[[:space:]]*"[^"]*")*[[:space:]]*\][[:space:]]*$', workflow.parameters['k3s-command']) ? workflow.parameters['k3s-command'] : 'INVALID'}}
+            command: {{=sprig.regexMatch('^[[:space:]]*[[][[:space:]]*"[^"]+"([[:space:]]*,[[:space:]]*"[^"]*")*[[:space:]]*[]][[:space:]]*$', workflow.parameters['k3s-command']) ? workflow.parameters['k3s-command'] : 'INVALID'}}
       container:
         # Empty is API-invalid, so a mutable/malformed image fails before a
         # workload container exists. Argo v4 expression tags expose Sprig's
@@ -164,7 +164,7 @@ spec:
                   # These three annotations, not the marker image below,
                   # deliver the executable to vk-native. All are required:
                   # a partial tuple is rejected by the backend.
-                  outpost.dhnt.io/native-artifact-url: "{{=sprig.regexMatch('^(https://[^[:space:]]+|http://(127\\.0\\.0\\.1|localhost)(:[0-9]+)?/[^[:space:]]+)$', workflow.parameters['native-artifact-url']) ? workflow.parameters['native-artifact-url'] : ''}}"
+                  outpost.dhnt.io/native-artifact-url: "{{=sprig.regexMatch('^(https://[^[:space:]]+|http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?/[^[:space:]]+)$', workflow.parameters['native-artifact-url']) ? workflow.parameters['native-artifact-url'] : ''}}"
                   outpost.dhnt.io/native-artifact-sha256: "{{=sprig.regexMatch('^[0-9a-f]{64}$', workflow.parameters['native-artifact-sha256']) ? workflow.parameters['native-artifact-sha256'] : ''}}"
                   outpost.dhnt.io/native-artifact-path: "{{=sprig.regexMatch('^[A-Za-z0-9_][A-Za-z0-9._/-]*$', workflow.parameters['native-artifact-path']) && !sprig.contains('../', workflow.parameters['native-artifact-path']) && !sprig.hasSuffix('/..', workflow.parameters['native-artifact-path']) ? workflow.parameters['native-artifact-path'] : ''}}"
               spec:

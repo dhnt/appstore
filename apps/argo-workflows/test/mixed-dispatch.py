@@ -8,7 +8,12 @@ import sys
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-doc = yaml.safe_load((ROOT / "dispatch/mixed-dks.yaml").read_text())
+SOURCE = (ROOT / "dispatch/mixed-dks.yaml").read_text()
+doc = yaml.safe_load(SOURCE)
+
+
+def expression_backslashes(source):
+    return [line for line in source.splitlines() if "{{=" in line and "\\" in line]
 
 
 def errors(value):
@@ -74,6 +79,12 @@ def errors(value):
 
 
 failures = errors(doc)
+if expression_backslashes(SOURCE):
+    failures.append("Argo expression source contains parser-sensitive backslash escapes")
+if not expression_backslashes(
+    "command: {{=sprig.regexMatch('^\\[x', workflow.parameters.x)}}"
+):
+    failures.append("backslash-expression adversarial regression is ineffective")
 
 # Render-level negative cases: commands must be non-empty argv sequences.
 k3s_template = next(t for t in doc["spec"]["templates"] if t["name"] == "k3s-phase")
