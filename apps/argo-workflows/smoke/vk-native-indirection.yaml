@@ -75,6 +75,10 @@ spec:
       - name: native-artifact-url
       - name: native-artifact-sha256
       - name: native-artifact-path
+      # Optional opaque Secret profile name. Runtime bindings set this for
+      # private artifacts; credentials never enter Workflow metadata.
+      - name: native-artifact-credential-profile
+        value: ""
       # Explicit target selection. These become kubernetes.io/os and
       # kubernetes.io/arch nodeSelector keys on the payload pod.
       - name: target-os
@@ -142,6 +146,7 @@ spec:
                   outpost.dhnt.io/native-artifact-url: "{{workflow.parameters.native-artifact-url}}"
                   outpost.dhnt.io/native-artifact-sha256: "{{workflow.parameters.native-artifact-sha256}}"
                   outpost.dhnt.io/native-artifact-path: "{{workflow.parameters.native-artifact-path}}"
+                  outpost.dhnt.io/native-artifact-credential-profile: "{{=workflow.parameters['native-artifact-credential-profile'] == '' || sprig.regexMatch('^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$', workflow.parameters['native-artifact-credential-profile']) ? workflow.parameters['native-artifact-credential-profile'] : ''}}"
               spec:
                 restartPolicy: Never
                 # vk-native cannot mount projected volumes, and the default

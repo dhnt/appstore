@@ -377,6 +377,8 @@ if smoke_path.exists():
         ck("value" not in params.get(required, {"value": None}),
            f"smoke: parameter {required!r} must have NO default — it is a required submit-time "
            "input (there is no truthful cross-OS default)")
+    ck(params.get("native-artifact-credential-profile", {}).get("value") == "",
+       "smoke: private artifact credential profile must be optional and default empty")
     for defaulted in ("target-os", "target-arch"):
         ck(params.get(defaulted, {}).get("value"),
            f"smoke: parameter {defaulted!r} must be declared with an explicit default")
@@ -417,6 +419,12 @@ if smoke_path.exists():
         ck(re.search(r"^\s*" + re.escape(annotation) + r':\s*["\']?'
                      + re.escape(expression) + r'["\']?\s*$', manifest_raw, re.M) is not None,
            f"smoke: pod annotation {annotation!r} must come from its required workflow parameter")
+    ck("outpost.dhnt.io/native-artifact-credential-profile:" in manifest_raw
+       and "workflow.parameters['native-artifact-credential-profile']" in manifest_raw,
+       "smoke: private artifact profile name is not guarded and copied to the Pod annotation")
+    ck("X-Amz-" not in manifest_raw and "access-key" not in manifest_raw
+       and "secret-key" not in manifest_raw,
+       "smoke: portable Workflow contract contains presigned or credential material")
     ck("job-image" not in raw,
        "smoke: job-image is not a vk-native delivery mechanism and must not be exposed")
 

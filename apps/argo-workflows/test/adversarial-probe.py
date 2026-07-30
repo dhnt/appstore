@@ -343,6 +343,9 @@ native_required = (
 native_params_ok = all(
     name in params and "value" not in params[name] for name in native_required
 )
+profile_param_ok = (
+    params.get("native-artifact-credential-profile", {}).get("value") == ""
+)
 annotation_pairs = {
     "outpost.dhnt.io/native-artifact-url": "{{workflow.parameters.native-artifact-url}}",
     "outpost.dhnt.io/native-artifact-sha256": "{{workflow.parameters.native-artifact-sha256}}",
@@ -357,6 +360,10 @@ annotations_ok = all(
     )
     for key, value in annotation_pairs.items()
 )
+profile_annotation_ok = (
+    "outpost.dhnt.io/native-artifact-credential-profile:" in manifest_raw
+    and "workflow.parameters['native-artifact-credential-profile']" in manifest_raw
+)
 marker_ok = (
     re.search(r"^\s*image:\s*dhnt\.io/native-process\s*$", manifest_raw, re.M)
     is not None
@@ -364,7 +371,8 @@ marker_ok = (
     is not None
 )
 ck(
-    native_params_ok and annotations_ok and marker_ok and "job-image" not in smoke_text,
+    native_params_ok and profile_param_ok and annotations_ok
+    and profile_annotation_ok and marker_ok and "job-image" not in smoke_text,
     "vk-native payload is modeled as an OCI image instead of a verified native artifact",
     "  The smoke must require job-command plus native-artifact URL/SHA/path,\n"
     "  place the complete tuple on the Job pod annotations, and use only\n"

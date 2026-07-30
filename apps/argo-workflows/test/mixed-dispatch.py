@@ -39,6 +39,8 @@ def errors(value):
     ):
         if name not in params or "value" in params.get(name, {}):
             out.append(f"required parameter {name} is absent or defaulted")
+    if params.get("native-artifact-credential-profile", {}).get("value") != "":
+        out.append("private artifact profile must be optional and default empty")
     templates = {t["name"]: t for t in spec.get("templates", [])}
     k3s_template = templates.get("k3s-phase", {})
     k3s = k3s_template.get("container", {})
@@ -74,6 +76,7 @@ def errors(value):
         "outpost.dhnt.io/native-artifact-url",
         "outpost.dhnt.io/native-artifact-sha256",
         "outpost.dhnt.io/native-artifact-path",
+        "outpost.dhnt.io/native-artifact-credential-profile",
         "outpost.dhnt.io/termination-log-tail",
     }:
         out.append("verified native artifact tuple is incomplete")

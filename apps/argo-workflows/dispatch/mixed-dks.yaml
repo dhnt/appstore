@@ -96,6 +96,10 @@ spec:
       - name: native-artifact-url
       - name: native-artifact-sha256
       - name: native-artifact-path
+      # Optional runtime-only credential binding. The value is a Secret name
+      # in the payload Pod's namespace, never a credential or presigned URL.
+      - name: native-artifact-credential-profile
+        value: ""
       # REQUIRED immutable Bashy worker image for the real-k3s result
       # validator. It reads Pod status (never logs/exec), verifies the bounded
       # dhnt.native-result/v1 payload, and publishes the verified file as an
@@ -204,6 +208,9 @@ spec:
                   outpost.dhnt.io/native-artifact-url: "{{=sprig.regexMatch('^(https://[^[:space:]]+|http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?/[^[:space:]]+)$', workflow.parameters['native-artifact-url']) ? workflow.parameters['native-artifact-url'] : ''}}"
                   outpost.dhnt.io/native-artifact-sha256: "{{=sprig.regexMatch('^[0-9a-f]{64}$', workflow.parameters['native-artifact-sha256']) ? workflow.parameters['native-artifact-sha256'] : ''}}"
                   outpost.dhnt.io/native-artifact-path: "{{=sprig.regexMatch('^[A-Za-z0-9_][A-Za-z0-9._/-]*$', workflow.parameters['native-artifact-path']) && !sprig.contains('../', workflow.parameters['native-artifact-path']) && !sprig.hasSuffix('/..', workflow.parameters['native-artifact-path']) ? workflow.parameters['native-artifact-path'] : ''}}"
+                  # Opaque same-namespace Secret profile name only. Outpost
+                  # resolves and scope-checks it at execution time.
+                  outpost.dhnt.io/native-artifact-credential-profile: "{{=workflow.parameters['native-artifact-credential-profile'] == '' || sprig.regexMatch('^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$', workflow.parameters['native-artifact-credential-profile']) ? workflow.parameters['native-artifact-credential-profile'] : ''}}"
                   # Opt in to Outpost's kubelet-sized (4 KiB) terminal channel.
                   # The validator rejects missing, duplicate, oversized,
                   # malformed, or digest-mismatched result markers.

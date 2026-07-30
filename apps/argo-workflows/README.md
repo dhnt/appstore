@@ -224,6 +224,18 @@ they express the actual native execution contract:
   `target-os` and `target-arch` must match the supplied executable. This ships
   as a *template plus a tested structure*, not as a turnkey command.
 
+Private artifacts add one optional runtime binding:
+`native-artifact-credential-profile`. Its value is only the name of a Secret
+in the payload Pod's namespace. The Secret is created by the operator/broker,
+not embedded in this portable WorkflowTemplate, and has type
+`outpost.dhnt.io/native-artifact-profile` with runtime-only `kind`, `scope`,
+`access-key`, `secret-key`, and `region` data. `kind` is currently
+`aws-sigv4`; `scope` is a query-free HTTPS origin plus path prefix. Outpost
+resolves the profile on the selected host, refuses cross-namespace references,
+signs the query-free S3 URL locally, and refuses redirects. Neither credential
+values nor presigned query strings enter Workflow metadata, evidence, or
+result artifacts.
+
 `test/fixtures/native-artifact.parameters.yaml` shows the complete parameter
 shape. Replace every example value with the immutable release artifact for the
 selected OS and architecture before submission.
