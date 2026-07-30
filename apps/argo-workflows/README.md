@@ -211,6 +211,26 @@ than zero; the template explicitly maps non-positive input to API-invalid `-1`,
 so submission fails closed before a viable Job can schedule. This is additional
 to, and does not replace, the workflow/task timeout semantics enforced by Argo.
 
+## Reusable mixed DKS dispatcher
+
+`dispatch/mixed-dks.yaml` promotes the proven indirection into a bounded
+`WorkflowTemplate`: a required OCI image/script runs on real Linux k3s, then
+Argo creates and watches one ordinary native Job. The native payload is hard
+selected by backend, stable `outpost.dhnt.io/host`, OS, and architecture and
+executes only the required HTTPS/SHA-256/member-path tuple through the
+`dhnt.io/native-process` marker.
+
+Apply `smoke/rbac.yaml` once in the workflow namespace; its namespaced Job
+grant is also the dispatcher grant. Required inputs are `k3s-image`,
+`k3s-script`, `target-host`, `job-command`, and the three native artifact
+parameters. None transports a secret. Native failure propagates through Job
+status, a positive deadline, `backoffLimit: 0`, and the resource template's
+explicit `failureCondition`; there is no log, exec, retry, or backend fallback.
+
+Output artifact collection is deliberately outside this v1 contract. A native
+payload must publish results to an authenticated endpoint itself, followed by
+a real-k3s evidence-validation step before promotion.
+
 ## Install
 
 Namespaced by default. Access the server through the cloudbox/outpost reverse
