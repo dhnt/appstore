@@ -28,6 +28,16 @@
 # regular file. OS and architecture remain explicit because the archive must
 # contain a native executable for the selected host.
 #
+# RESULTS. The native process may return one small file (at most 2 KiB) in one
+# canonical dhnt.native-result/v1 marker inside Outpost's opt-in 4 KiB terminal
+# tail. The envelope binds expected file kind/name/SHA-256, its exact bytes, a
+# passing dhnt.run/v2 output set/commit, and executor identity. A trusted Bashy
+# validator on real k3s independently reads the live Job/Pod, verifies ownership
+# and nodeName, checks every digest, and exposes only the verified file as an
+# Argo artifact. Missing/tampered/duplicate/oversized results fail the workflow.
+# Larger files and trees require authenticated artifact storage and are not
+# smuggled through Pod status.
+#
 # Apply smoke/rbac.yaml first (the `argo-workflow` ServiceAccount cannot touch
 # batch/v1 Jobs otherwise). Usage: see ../README.md#mixed-dks-dispatch.
 apiVersion: argoproj.io/v1alpha1
@@ -80,6 +90,14 @@ spec:
       - name: native-artifact-url
       - name: native-artifact-sha256
       - name: native-artifact-path
+      # REQUIRED immutable Bashy worker image for the real-k3s result
+      # validator. It reads Pod status (never logs/exec), verifies the bounded
+      # dhnt.native-result/v1 payload, and publishes the verified file as an
+      # ordinary Argo artifact.
+      - name: result-validator-image
+      - name: expected-result-name
+      - name: expected-result-kind
+      - name: expected-result-sha256
       # Explicit target selection. These become kubernetes.io/os and
       # kubernetes.io/arch nodeSelector keys on the payload pod.
       - name: target-os
@@ -89,6 +107,9 @@ spec:
       # REQUIRED stable outpost identity (for example `dragon`), preventing
       # same-OS/arch work from drifting to a different native host.
       - name: target-host
+      # REQUIRED exact Kubernetes Node object name. This is separately checked
+      # against the successful Pod's live spec.nodeName.
+      - name: target-node
       # Taint key the native nodes carry. Overridable per fleet.
       # Empty input is rejected by the guarded expression in the Job manifest.
       - name: vk-taint-key
@@ -106,6 +127,16 @@ spec:
             template: k3s-phase
         - - name: create-and-watch
             template: create-watch-job
+        - - name: validate-native-result
+            template: validate-native-result
+      outputs:
+        parameters:
+          - name: native-run
+            valueFrom:
+              parameter: "{{steps.validate-native-result.outputs.parameters.native-run}}"
+        artifacts:
+          - name: native-result
+            from: "{{steps.validate-native-result.outputs.artifacts.native-result}}"
 
     # Ordinary OCI work runs only on a real Linux k3s agent.
     - name: k3s-phase
@@ -167,6 +198,10 @@ spec:
                   outpost.dhnt.io/native-artifact-url: "{{=sprig.regexMatch('^(https://[^[:space:]]+|http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?/[^[:space:]]+)$', workflow.parameters['native-artifact-url']) ? workflow.parameters['native-artifact-url'] : ''}}"
                   outpost.dhnt.io/native-artifact-sha256: "{{=sprig.regexMatch('^[0-9a-f]{64}$', workflow.parameters['native-artifact-sha256']) ? workflow.parameters['native-artifact-sha256'] : ''}}"
                   outpost.dhnt.io/native-artifact-path: "{{=sprig.regexMatch('^[A-Za-z0-9_][A-Za-z0-9._/-]*$', workflow.parameters['native-artifact-path']) && !sprig.contains('../', workflow.parameters['native-artifact-path']) && !sprig.hasSuffix('/..', workflow.parameters['native-artifact-path']) ? workflow.parameters['native-artifact-path'] : ''}}"
+                  # Opt in to Outpost's kubelet-sized (4 KiB) terminal channel.
+                  # The validator rejects missing, duplicate, oversized,
+                  # malformed, or digest-mismatched result markers.
+                  outpost.dhnt.io/termination-log-tail: "true"
               spec:
                 restartPolicy: Never
                 # vk-native cannot mount projected volumes, and the default
@@ -176,6 +211,7 @@ spec:
                 nodeSelector:
                   outpost.dhnt.io/backend: vk-native
                   outpost.dhnt.io/host: "{{workflow.parameters.target-host}}"
+                  kubernetes.io/hostname: "{{workflow.parameters.target-node}}"
                   kubernetes.io/os: "{{workflow.parameters.target-os}}"
                   kubernetes.io/arch: "{{workflow.parameters.target-arch}}"
                 tolerations:
@@ -206,6 +242,71 @@ spec:
                         value: "{{workflow.parameters.target-os}}"
                       - name: DHNT_TARGET_ARCH
                         value: "{{workflow.parameters.target-arch}}"
+
+    # This trusted collector runs on real k3s, never vk-native. It does not
+    # trust executor identity embedded by the payload: Job UID ownership,
+    # successful Pod uniqueness, and nodeName are read from the live Pod.
+    # Backend/OS/arch are the required placement inputs also enforced by the
+    # Job's hard nodeSelector.
+    - name: validate-native-result
+      container:
+        image: "{{=sprig.regexMatch('^.+@sha256:[0-9a-f]{64}$', workflow.parameters['result-validator-image']) ? workflow.parameters['result-validator-image'] : ''}}"
+        imagePullPolicy: IfNotPresent
+        command: ["bashy", "-c"]
+        args:
+          - |
+            set -eu
+            self="$0"
+            namespace="{{workflow.namespace}}"
+            job="{{workflow.name}}-vk-native"
+            output_dir=/tmp/dhnt-native-result
+            "$self" mkdir -p "$output_dir"
+            job_uid=$("$self" kubectl get job "$job" -n "$namespace" -o jsonpath='{.metadata.uid}')
+            [ -n "$job_uid" ]
+            pods=$("$self" kubectl get pods -n "$namespace" -l "job-name=$job" \
+              -o jsonpath='{range .items[?(@.status.phase=="Succeeded")]}{.metadata.name}{"\n"}{end}')
+            count=$(printf '%s\n' "$pods" | "$self" grep -c . || true)
+            [ "$count" -eq 1 ] || {
+              echo "native result: expected exactly one successful Pod, got $count" >&2
+              exit 4
+            }
+            pod="$pods"
+            owner_uid=$("$self" kubectl get pod "$pod" -n "$namespace" \
+              -o jsonpath='{.metadata.ownerReferences[0].uid}')
+            [ "$owner_uid" = "$job_uid" ] || {
+              echo "native result: successful Pod is not owned by live Job" >&2
+              exit 4
+            }
+            node=$("$self" kubectl get pod "$pod" -n "$namespace" -o jsonpath='{.spec.nodeName}')
+            [ -n "$node" ] && [ "$node" = "{{workflow.parameters.target-node}}" ] || {
+              echo "native result: live Pod node does not match expected executor" >&2
+              exit 4
+            }
+            message=$("$self" kubectl get pod "$pod" -n "$namespace" \
+              -o jsonpath='{.status.containerStatuses[0].state.terminated.message}')
+            printf '%s' "$message" > "$output_dir/message"
+            expected_kind="{{=workflow.parameters['expected-result-kind'] == 'file' ? workflow.parameters['expected-result-kind'] : 'INVALID'}}"
+            expected_sha256="{{=sprig.regexMatch('^[0-9a-f]{64}$', workflow.parameters['expected-result-sha256']) ? workflow.parameters['expected-result-sha256'] : ''}}"
+            "$self" dhnt verify-native-result \
+              --expect-name "{{workflow.parameters.expected-result-name}}" \
+              --expect-kind "$expected_kind" \
+              --expect-sha256 "$expected_sha256" \
+              --expect-node "$node" \
+              --expect-backend vk-native \
+              --expect-os "{{workflow.parameters.target-os}}" \
+              --expect-arch "{{workflow.parameters.target-arch}}" \
+              --artifact-output "$output_dir/artifact" \
+              "$output_dir/message" > "$output_dir/run.json"
+      outputs:
+        parameters:
+          - name: native-run
+            valueFrom:
+              path: /tmp/dhnt-native-result/run.json
+        artifacts:
+          - name: native-result
+            path: /tmp/dhnt-native-result/artifact
+            archive:
+              none: {}
 
     # ---- Delete ----------------------------------------------------------
     # Runs as the workflow's onExit handler, so the Job is removed on success,

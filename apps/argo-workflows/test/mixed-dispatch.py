@@ -25,8 +25,12 @@ def errors(value):
     } or spec.get("tolerations") != []:
         out.append("Argo pods are not hard-placed on real Linux k3s")
     params = {p["name"]: p for p in spec.get("arguments", {}).get("parameters", [])}
-    for name in ("k3s-image", "k3s-command", "job-command", "native-artifact-url",
-                 "native-artifact-sha256", "native-artifact-path", "target-host"):
+    for name in (
+        "k3s-image", "k3s-command", "job-command", "native-artifact-url",
+        "native-artifact-sha256", "native-artifact-path", "target-host",
+        "target-node", "result-validator-image", "expected-result-name",
+        "expected-result-kind", "expected-result-sha256",
+    ):
         if name not in params or "value" in params.get(name, {}):
             out.append(f"required parameter {name} is absent or defaulted")
     templates = {t["name"]: t for t in spec.get("templates", [])}
@@ -53,7 +57,7 @@ def errors(value):
     selector = pod.get("nodeSelector", {})
     if selector.get("outpost.dhnt.io/backend") != "vk-native" or set(selector) != {
         "outpost.dhnt.io/backend", "outpost.dhnt.io/host",
-        "kubernetes.io/os", "kubernetes.io/arch",
+        "kubernetes.io/hostname", "kubernetes.io/os", "kubernetes.io/arch",
     }:
         out.append("native payload placement is not exact backend+host+os+arch")
     containers = pod.get("containers", [])
@@ -64,10 +68,14 @@ def errors(value):
         "outpost.dhnt.io/native-artifact-url",
         "outpost.dhnt.io/native-artifact-sha256",
         "outpost.dhnt.io/native-artifact-path",
+        "outpost.dhnt.io/termination-log-tail",
     }:
         out.append("verified native artifact tuple is incomplete")
     for key, value in annotations.items():
-        if value != "PARAM":
+        if key == "outpost.dhnt.io/termination-log-tail":
+            if value != "true":
+                out.append("native result channel is not explicitly bounded/opted in")
+        elif value != "PARAM":
             out.append(f"native annotation {key} lacks expression guard")
     if pod.get("automountServiceAccountToken") is not False or pod.get("volumes"):
         out.append("native payload admits projected credentials or volumes")
@@ -75,6 +83,27 @@ def errors(value):
         if "valueFrom" in env or any(word in env.get("name", "").lower()
                                     for word in ("secret", "token", "password", "key")):
             out.append("native payload contains credential-bearing env")
+    validator = templates.get("validate-native-result", {}).get("container", {})
+    validator_image = str(validator.get("image", ""))
+    if ("@sha256:[0-9a-f]{64}" not in validator_image or
+            "? workflow.parameters['result-validator-image'] : ''" not in validator_image):
+        out.append("native result validator image is not immutable/fail-closed")
+    if validator.get("command") != ["bashy", "-c"]:
+        out.append("native result validator does not use the trusted Bashy verifier")
+    validator_script = "\n".join(validator.get("args", []))
+    for required in (
+        "owner_uid", "job_uid", "spec.nodeName", "target-node",
+        "dhnt verify-native-result", "--expect-name", "--expect-kind",
+        "--expect-sha256", "--expect-node", "--expect-backend vk-native",
+        "--artifact-output",
+    ):
+        if required not in validator_script:
+            out.append(f"native result validator lacks {required!r} cross-check")
+    outputs = templates.get("validate-native-result", {}).get("outputs", {})
+    output_artifacts = outputs.get("artifacts", [])
+    if len(output_artifacts) != 1 or output_artifacts[0].get("path") != \
+            "/tmp/dhnt-native-result/artifact":
+        out.append("verified native result is not exposed as one Argo artifact")
     return out
 
 
@@ -167,6 +196,21 @@ mutations = {
     "shell k3s command": lambda d: next(
         t for t in d["spec"]["templates"] if t["name"] == "k3s-phase"
     ).update(podSpecPatch='containers: [{name: main, command: ["/bin/sh","-c"]}]'),
+    "missing native result verifier": lambda d: d["spec"]["templates"].remove(
+        next(t for t in d["spec"]["templates"]
+             if t["name"] == "validate-native-result")),
+    "missing bounded result opt-in": lambda d: (
+        lambda manifest: next(
+            t for t in d["spec"]["templates"]
+            if t["name"] == "create-watch-job"
+        )["resource"].update(
+            manifest=manifest.replace(
+                'outpost.dhnt.io/termination-log-tail: "true"',
+                'removed.example/termination-log-tail: "true"',
+            )
+        )
+    )(next(t for t in d["spec"]["templates"]
+           if t["name"] == "create-watch-job")["resource"]["manifest"]),
 }
 for name, mutate in mutations.items():
     candidate = copy.deepcopy(doc)

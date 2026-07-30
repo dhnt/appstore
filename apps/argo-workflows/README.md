@@ -223,8 +223,10 @@ executes only the required verified-URL/SHA-256/member-path tuple through the
 Apply `smoke/rbac.yaml` once in the workflow namespace; its namespaced Job
 grant is also the dispatcher grant. Required inputs are immutable
 `k3s-image` (`name@sha256:<64 lowercase hex>`), JSON/YAML argv
-`k3s-command`, `target-host`, `job-command`, and the three native artifact
-parameters. None transports a secret. Native failure propagates through Job
+`k3s-command`, `target-host`, exact `target-node`, `job-command`, the three
+native executable artifact parameters, immutable `result-validator-image`, and
+the expected result name/kind/SHA-256. None transports a secret. Native failure
+propagates through Job
 status, a positive deadline, `backoffLimit: 0`, and the resource template's
 explicit `failureCondition`; there is no log, exec, retry, or backend fallback.
 The k3s command is merged directly into `container.command` with
@@ -236,9 +238,41 @@ transport is HTTPS, except for the backend's deliberately narrow locally
 controlled proof path: HTTP to literal `localhost` or `127.0.0.1`, with an
 optional port and a non-empty path.
 
-Output artifact collection is deliberately outside this v1 contract. A native
-payload must publish results to an authenticated endpoint itself, followed by
-a real-k3s evidence-validation step before promotion.
+The v2 result path is deliberately small and closed. A native payload may emit
+exactly one canonical `DKS_NATIVE_RESULT:dhnt.native-result/v1` record through
+Outpost's opt-in 4 KiB terminal tail. It may carry one file of at most 2 KiB;
+trees and larger outputs remain in authenticated artifact storage. The record
+contains the exact bytes, expected file identity, and a passing `dhnt.run/v2`
+with its output-set commit. After Job success, the real-k3s validator:
+
+- requires exactly one successful Pod owned by the current Job UID;
+- compares its live `spec.nodeName` with the exact required `target-node`;
+- validates executor backend/OS/architecture against the same hard-placement
+  inputs used by the Job;
+- rejects missing, duplicate, oversized, noncanonical, wrong-kind, and
+  digest-mismatched result records;
+- publishes only the verified bytes as `native-result` plus the canonical run
+  parameter.
+
+This is result collection, not general log transport. The validator reads Pod
+status only; RBAC still grants neither `pods/log` nor `pods/exec`.
+
+The native command produces the final marker with the same Bashy contract
+library used by the validator:
+
+```sh
+bashy dhnt wrap-native-result \
+  --run /work/evidence/native-run-v2.json \
+  --artifact /work/out/result.json
+```
+
+The run file must already be canonical, passing `dhnt.run/v2`, declare exactly
+one `file`/`sha256-file-v1` output matching the artifact bytes, and contain the
+canonical output-set commit. `wrap-native-result` rejects symlinks, non-regular
+files, oversized files, and digest mismatches. Its marker must be the final
+workload output so the bounded tail cannot evict it. The collector's
+`verify-native-result` command independently rechecks the complete envelope and
+publishes to an exclusive destination without overwriting prior bytes.
 
 ## Install
 
