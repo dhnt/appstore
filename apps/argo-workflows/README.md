@@ -217,7 +217,7 @@ to, and does not replace, the workflow/task timeout semantics enforced by Argo.
 `WorkflowTemplate`: a required OCI image/script runs on real Linux k3s, then
 Argo creates and watches one ordinary native Job. The native payload is hard
 selected by backend, stable `outpost.dhnt.io/host`, OS, and architecture and
-executes only the required HTTPS/SHA-256/member-path tuple through the
+executes only the required verified-URL/SHA-256/member-path tuple through the
 `dhnt.io/native-process` marker.
 
 Apply `smoke/rbac.yaml` once in the workflow namespace; its namespaced Job
@@ -231,7 +231,10 @@ The k3s command is merged directly into `container.command` with
 `podSpecPatch`; no shell parses or reinterprets workload text. Argo expression
 guards map malformed/empty argv to an invalid Pod patch, mutable images to an
 empty image, and malformed native URL/digest/path inputs to empty required
-fields, making Pod creation or the native backend fail closed.
+fields, making Pod creation or the native backend fail closed. Artifact
+transport is HTTPS, except for the backend's deliberately narrow locally
+controlled proof path: HTTP to literal `localhost` or `127.0.0.1`, with an
+optional port and a non-empty path.
 
 Output artifact collection is deliberately outside this v1 contract. A native
 payload must publish results to an authenticated endpoint itself, followed by

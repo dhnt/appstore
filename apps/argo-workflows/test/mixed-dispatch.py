@@ -108,7 +108,9 @@ for image, valid in (
         failures.append(f"k3s-image guard mismatch for {image!r}")
 
 sha_pattern = re.compile(r"^[0-9a-f]{64}$")
-url_pattern = re.compile(r"^https://[^\s]+$")
+url_pattern = re.compile(
+    r"^(https://[^\s]+|http://(127\.0\.0\.1|localhost)(:[0-9]+)?/[^\s]+)$"
+)
 path_pattern = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/-]*$")
 for value in ("", "abc", "A" * 64, "0" * 63):
     if sha_pattern.fullmatch(value):
@@ -116,6 +118,23 @@ for value in ("", "abc", "A" * 64, "0" * 63):
 for value in ("", "http://example/tool.tgz", "https://bad url/tool.tgz"):
     if url_pattern.fullmatch(value):
         failures.append(f"invalid native URL accepted: {value!r}")
+for value in (
+    "https://artifacts.example/tool.tgz",
+    "http://localhost/tool.tgz",
+    "http://localhost:8080/releases/tool.tgz",
+    "http://127.0.0.1:9090/tool.zip",
+):
+    if not url_pattern.fullmatch(value):
+        failures.append(f"valid native URL rejected: {value!r}")
+for value in (
+    "http://127.0.0.2/tool.tgz",
+    "http://localhost.evil/tool.tgz",
+    "http://localhost",
+    "http://127.0.0.1:bad/tool.tgz",
+    "http://127.0.0.1/bad path/tool.tgz",
+):
+    if url_pattern.fullmatch(value):
+        failures.append(f"unsafe loopback native URL accepted: {value!r}")
 for value in ("", "/tool", "../tool", "bin/../tool", "bin/..", r"bin\\tool"):
     valid = bool(path_pattern.fullmatch(value)) and "../" not in value and not value.endswith("/..")
     if valid:
