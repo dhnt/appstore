@@ -74,6 +74,43 @@ extraObjects:
       - apiGroups: [argoproj.io]
         resources: [clusterworkflowtemplates, clusterworkflowtemplates/finalizers]
         verbs: [get, list, watch]
+  # Default namespaced authenticated-artifact contract. The Secret itself is
+  # deliberately operator-owned and never rendered by this chart.
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: seaweedfs-s3
+      labels:
+        app.kubernetes.io/name: argo-workflows
+        app.kubernetes.io/part-of: dhnt-dks
+        dhnt.io/contract: authenticated-artifacts
+    spec:
+      type: ExternalName
+      externalName: seaweedfs-s3.seaweedfs-system.svc.cluster.local
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: artifact-repositories
+      annotations:
+        workflows.argoproj.io/default-artifact-repository: seaweedfs-v1
+      labels:
+        app.kubernetes.io/name: argo-workflows
+        app.kubernetes.io/part-of: dhnt-dks
+        dhnt.io/contract: authenticated-artifacts
+    data:
+      seaweedfs-v1: |
+        s3:
+          endpoint: seaweedfs-s3:8333
+          bucket: argo-artifacts
+          region: us-east-1
+          insecure: true
+          keyFormat: artifacts/{{ "{{workflow.namespace}}" }}/{{ "{{workflow.uid}}" }}/{{ "{{pod.name}}" }}
+          accessKeySecret:
+            name: argo-artifacts-s3
+            key: accesskey
+          secretKeySecret:
+            name: argo-artifacts-s3
+            key: secretkey
 
 # Bound Argo's init/wait executor containers explicitly. Without this, a tenant
 # LimitRange can silently assign 500m or 1 CPU to each generated executor
@@ -198,12 +235,19 @@ workflow:
 # ---------------------------------------------------------------------------
 # Artifact repository (S3-compatible: SeaweedFS, MinIO, R2, S3)
 # ---------------------------------------------------------------------------
-# Default: no artifact repository configured and no log archival, so an
-# out-of-the-box install has nothing to leak and nothing to misconfigure.
+# The controller-wide artifact repository and log archival remain off by
+# default. The namespaced SeaweedFS contract above is installed automatically,
+# but is inert until its referenced Secret and pre-created bucket exist.
 #
-# To enable, uncomment the `s3` block and create the referenced Secret
-# out-of-band. `accessKeySecret`/`secretKeySecret` are Secret REFERENCES —
-# never inline the keys here, and never commit a Secret manifest to this repo.
+# For the bundled authenticated SeaweedFS plane, create the referenced Secret
+# out-of-band. `artifacts/seaweedfs.yaml` mirrors the chart-installed objects
+# for existing releases and manual repair. The reusable mixed DKS dispatcher
+# explicitly selects that namespaced ConfigMap/key and therefore fails closed
+# when either is absent.
+#
+# Alternatively, uncomment the controller-wide `s3` block below and create the
+# referenced Secret out-of-band. `accessKeySecret`/`secretKeySecret` are Secret
+# REFERENCES — never inline the keys here, and never commit a Secret manifest.
 #
 #   kubectl -n <ns> create secret generic argo-artifacts-s3 \
 #     --from-literal=accesskey=<id> --from-literal=secretkey=<key>
@@ -211,11 +255,11 @@ workflow:
 artifactRepository:
   archiveLogs: false
   # s3:
-  #   endpoint: seaweedfs-s3.seaweedfs.svc.cluster.local:8333
+  #   endpoint: seaweedfs-s3:8333  # with artifacts/seaweedfs.yaml alias
   #   bucket: argo-artifacts
   #   region: us-east-1
   #   insecure: true          # in-cluster plaintext; false for public S3/R2
-  #   keyFormat: "{{workflow.namespace}}/{{workflow.name}}/{{pod.name}}"
+  #   keyFormat: "artifacts/{{workflow.namespace}}/{{workflow.uid}}/{{pod.name}}"
   #   accessKeySecret:
   #     name: argo-artifacts-s3
   #     key: accesskey

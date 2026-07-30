@@ -23,10 +23,11 @@ controller:
 artifactRepository:
   archiveLogs: true
   s3:
-    endpoint: seaweedfs-s3.seaweedfs.svc.cluster.local:8333
+    endpoint: seaweedfs-s3:8333
     bucket: argo-artifacts
     region: us-east-1
     insecure: true
+    keyFormat: "artifacts/{{workflow.namespace}}/{{workflow.uid}}/{{pod.name}}"
     accessKeySecret:
       name: argo-artifacts-s3
       key: accesskey

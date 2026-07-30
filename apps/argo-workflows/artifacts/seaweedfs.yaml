@@ -1,0 +1,45 @@
+# Namespaced Argo artifact-repository contract for the authenticated SeaweedFS
+# S3 gateway installed by builtin/seaweedfs.
+#
+# Apply these objects in the same namespace as the Workflow and create the
+# referenced Secret out of band. The ConfigMap contains only selectors; never
+# add credentials here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs-s3
+  labels:
+    app.kubernetes.io/name: argo-workflows
+    app.kubernetes.io/part-of: dhnt-dks
+    dhnt.io/contract: authenticated-artifacts
+spec:
+  type: ExternalName
+  externalName: seaweedfs-s3.seaweedfs-system.svc.cluster.local
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: artifact-repositories
+  annotations:
+    workflows.argoproj.io/default-artifact-repository: seaweedfs-v1
+  labels:
+    app.kubernetes.io/name: argo-workflows
+    app.kubernetes.io/part-of: dhnt-dks
+    dhnt.io/contract: authenticated-artifacts
+data:
+  seaweedfs-v1: |
+    s3:
+      # Argo 4.0.7's MinIO client uses path-style addressing for a
+      # single-label endpoint. The ExternalName above supplies that stable
+      # namespaced alias without pinning the backing Service ClusterIP.
+      endpoint: seaweedfs-s3:8333
+      bucket: argo-artifacts
+      region: us-east-1
+      insecure: true
+      keyFormat: artifacts/{{workflow.namespace}}/{{workflow.uid}}/{{pod.name}}
+      accessKeySecret:
+        name: argo-artifacts-s3
+        key: accesskey
+      secretKeySecret:
+        name: argo-artifacts-s3
+        key: secretkey

@@ -106,8 +106,11 @@ Native execution is therefore reached **indirectly** — see the smoke below.
 
 ## Workflow archive and artifact repository
 
-Both are **off by default** and both are wired with **Secret references only**.
-No credential ever lives in this repo.
+The workflow archive and controller-wide repository are **off by default**.
+The chart does install a namespaced SeaweedFS repository contract, but it is
+inert until the operator creates its referenced Secret and bucket. Every path
+is wired with **Secret references only**. No credential ever lives in this
+repo.
 
 ```bash
 # workflow archive (needs an external PostgreSQL)
@@ -119,11 +122,45 @@ kubectl -n <ns> create secret generic argo-artifacts-s3 \
   --from-literal=accesskey='<id>' --from-literal=secretkey='<key>'
 ```
 
-Then uncomment the `controller.persistence` and `artifactRepository.s3` blocks
-in `values.yaml`. `test/fixtures/enabled.values.yaml` is a ready-made overlay of
-exactly that shape, and `test/render.sh` renders it to prove the wiring produces
+Then uncomment the `controller.persistence` and controller-wide
+`artifactRepository.s3` blocks in `values.yaml`.
+`test/fixtures/enabled.values.yaml` is a ready-made overlay of exactly that
+shape, and `test/render.sh` renders it to prove the wiring produces
 `accessKeySecret` / `secretKeySecret` / `passwordSecret` references and emits no
 `Secret` object of its own.
+
+For the built-in authenticated SeaweedFS plane, prefer the explicit namespaced
+repository contract installed by the chart. `artifacts/seaweedfs.yaml` is the
+same contract as a standalone manifest for existing releases or manual repair:
+
+```bash
+kubectl -n <ns> apply -f artifacts/seaweedfs.yaml
+kubectl -n <ns> create secret generic argo-artifacts-s3 \
+  --from-literal=accesskey='<bucket-scoped-id>' \
+  --from-literal=secretkey='<bucket-scoped-secret>'
+```
+
+The operator must create the `argo-artifacts` bucket before submitting a
+workflow. The SeaweedFS identity should be limited to
+`Read:argo-artifacts`, `List:argo-artifacts`, `Write:argo-artifacts`, and
+`Tagging:argo-artifacts`. Do not grant `Admin` or delete access to the workflow
+identity: this package does not enable artifact garbage collection. Bucket
+creation and credential rotation remain operator actions.
+
+`dispatch/mixed-dks.yaml` explicitly references
+`artifact-repositories/seaweedfs-v1`; it does not inherit an arbitrary
+controller-wide destination. Missing ConfigMap, missing key, missing Secret,
+authentication failure, absent bucket, upload failure, or digest mismatch all
+leave the workflow non-successful. Object keys are rooted at
+`artifacts/<namespace>/<workflow UID>/<pod name>`, using only
+controller-derived identities rather than user-supplied path text.
+
+The manifest also creates a namespaced, single-label `seaweedfs-s3`
+`ExternalName` alias to the cross-namespace gateway. This is intentional for
+the pinned Argo 4.0.7 client: its MinIO dependency auto-selects path-style S3
+addressing for the single-label endpoint. A fully-qualified Kubernetes service
+name can make that client attempt bucket-prefixed virtual-host DNS, for which
+Kubernetes does not provide a wildcard record. No Service ClusterIP is pinned.
 
 ## vk-native indirection smoke
 
@@ -256,6 +293,15 @@ with its output-set commit. After Job success, the real-k3s validator:
 
 This is result collection, not general log transport. The validator reads Pod
 status only; RBAC still grants neither `pods/log` nor `pods/exec`.
+
+The validator image is also an offline execution boundary. It must preseed a
+DKS-compatible `kubectl` in Bashy's supported managed-tool cache layout:
+`$BASHY_BIN_CACHE/kubectl/<version>/kubectl`, with `BASHY_BIN_CACHE` set in the
+image (for example `/opt/bashy-bin`). Do not rely on a runtime download: the
+collector may have no public egress, and a missing cached tool must fail the
+workflow. The mixed-v2 live proof used kubectl `v1.36.1` for a DKS `v1.36.1`
+server. Pin the validator image by digest as required above, and rebuild that
+digest when the supported kubectl version changes.
 
 The native command produces the final marker with the same Bashy contract
 library used by the validator:

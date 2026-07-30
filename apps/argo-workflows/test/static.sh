@@ -584,3 +584,4 @@ PY
 # Keep the checked-in adversarial regression battery in the normal static gate.
 python3 "$HERE/adversarial-probe.py" "$APP_DIR"
 python3 "$HERE/mixed-dispatch.py"
+python3 "$HERE/artifact-repository.py"

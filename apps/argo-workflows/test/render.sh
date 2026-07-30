@@ -280,6 +280,39 @@ ck("vk-native" not in default_text,
    "the default render mentions vk-native — package-managed chart objects and defaults "
    "must target k3s")
 
+# --- namespaced authenticated artifact repository contract -----------------
+aliases = [d for d in by_kind(default_docs, "Service")
+           if (d.get("metadata") or {}).get("name") == "seaweedfs-s3"]
+ck(len(aliases) == 1, f"expected one seaweedfs-s3 Service, got {len(aliases)}")
+if aliases:
+    ck(aliases[0].get("spec") == {
+        "type": "ExternalName",
+        "externalName": "seaweedfs-s3.seaweedfs-system.svc.cluster.local",
+    }, f"seaweedfs-s3 must be the stable cross-namespace DNS alias, got "
+       f"{aliases[0].get('spec')}")
+
+repositories = [d for d in by_kind(default_docs, "ConfigMap")
+                if (d.get("metadata") or {}).get("name") == "artifact-repositories"]
+ck(len(repositories) == 1,
+   f"expected one artifact-repositories ConfigMap, got {len(repositories)}")
+if repositories:
+    annotations = (repositories[0].get("metadata") or {}).get("annotations") or {}
+    ck(annotations.get("workflows.argoproj.io/default-artifact-repository") == "seaweedfs-v1",
+       "artifact-repositories must select seaweedfs-v1")
+    raw_repository = (repositories[0].get("data") or {}).get("seaweedfs-v1", "")
+    repository = yaml.safe_load(raw_repository) or {}
+    ck(repository == {
+        "s3": {
+            "endpoint": "seaweedfs-s3:8333",
+            "bucket": "argo-artifacts",
+            "region": "us-east-1",
+            "insecure": True,
+            "keyFormat": "artifacts/{{workflow.namespace}}/{{workflow.uid}}/{{pod.name}}",
+            "accessKeySecret": {"name": "argo-artifacts-s3", "key": "accesskey"},
+            "secretKeySecret": {"name": "argo-artifacts-s3", "key": "secretkey"},
+        }
+    }, f"artifact-repositories/seaweedfs-v1 drifted: {repository!r}")
+
 # --- enabled overlay: archive + artifacts by Secret reference only ---------
 enabled_text, enabled_docs = docs("enabled.yaml")
 ecms = [d for d in by_kind(enabled_docs, "ConfigMap")

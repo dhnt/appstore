@@ -9,6 +9,7 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "dispatch/mixed-dks.yaml").read_text()
+README = (ROOT / "README.md").read_text()
 doc = yaml.safe_load(SOURCE)
 
 
@@ -19,6 +20,11 @@ def expression_backslashes(source):
 def errors(value):
     out = []
     spec = value.get("spec", {})
+    if spec.get("artifactRepositoryRef") != {
+        "configMap": "artifact-repositories",
+        "key": "seaweedfs-v1",
+    }:
+        out.append("artifact repository is not an explicit namespaced fail-closed reference")
     if spec.get("nodeSelector") != {
         "outpost.dhnt.io/backend": "k3s",
         "kubernetes.io/os": "linux",
@@ -108,6 +114,15 @@ def errors(value):
 
 
 failures = errors(doc)
+for required_doc in (
+    "BASHY_BIN_CACHE",
+    "$BASHY_BIN_CACHE/kubectl/<version>/kubectl",
+    "runtime download",
+):
+    if required_doc not in README:
+        failures.append(
+            f"validator-image offline kubectl cache contract lacks {required_doc!r}"
+        )
 if expression_backslashes(SOURCE):
     failures.append("Argo expression source contains parser-sensitive backslash escapes")
 if not expression_backslashes(
@@ -181,6 +196,9 @@ for value in ("", "/tool", "../tool", "bin/../tool", "bin/..", r"bin\\tool"):
         failures.append(f"unsafe native path accepted: {value!r}")
 
 mutations = {
+    "missing artifact repository reference": lambda d: d["spec"].pop(
+        "artifactRepositoryRef"
+    ),
     "k3s fallback": lambda d: d["spec"].update(nodeSelector={}),
     "OCI-on-native": lambda d: next(t for t in d["spec"]["templates"]
                                     if t["name"] == "create-watch-job")["resource"].update(

@@ -55,6 +55,12 @@ spec:
   entrypoint: mixed-dispatch
   onExit: delete-job
   serviceAccountName: argo-workflow
+  # Resolve one explicit namespaced repository before executing. This prevents
+  # a cluster-global/default repository from silently receiving tenant
+  # artifacts and makes a missing ConfigMap/key fail closed.
+  artifactRepositoryRef:
+    configMap: artifact-repositories
+    key: seaweedfs-v1
 
   # ---- Argo-owned pods: real k3s agent nodes ONLY -------------------------
   # Applies to every pod this workflow creates, including the `resource`
