@@ -15,7 +15,10 @@
 #      to this prefix. Without it, assets reference `/static/*` at
 #      the apex which 404s through our service proxy.
 #   2. config.inCluster=true — Headlamp uses its own ServiceAccount
-#      token to dial the apiserver. Combined with the
+#      to discover the apiserver, but the chart's default cluster-admin
+#      binding is explicitly disabled below. The pod ServiceAccount therefore
+#      has zero RBAC grants; authority enters only through a token supplied to
+#      Headlamp for the user session. Combined with the
 #      cloudbox.dhnt.io/inject-user-token=true label on the Service
 #      (set by this manifest), cloudbox's ClusterServiceDirectProxy
 #      stamps the *caller's* user-SA token onto requests bound for
@@ -125,6 +128,7 @@ spec:
             --namespace headlamp \
             --set config.baseURL=/matrix/cluster/svc/headlamp/headlamp \
             --set config.inCluster=true \
+            --set clusterRoleBinding.create=false \
             --set replicaCount=2 \
             --wait \
             --timeout 5m
