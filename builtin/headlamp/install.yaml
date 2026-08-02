@@ -65,6 +65,12 @@ kind: Job
 metadata:
   name: install-headlamp
   namespace: headlamp
+  annotations:
+    outpost.dhnt.io/lifecycle: installer
+    outpost.dhnt.io/installs: >-
+      apps/v1:Deployment:headlamp:headlamp,
+      v1:Service:headlamp:headlamp,
+      policy/v1:PodDisruptionBudget:headlamp:headlamp
 spec:
   ttlSecondsAfterFinished: 600
   backoffLimit: 3

@@ -91,6 +91,11 @@ kind: Job
 metadata:
   name: install-kubeflow-pipelines
   namespace: kubeflow
+  annotations:
+    outpost.dhnt.io/lifecycle: installer
+    outpost.dhnt.io/installs: >-
+      apps/v1:Deployment:kubeflow:ml-pipeline,
+      apps/v1:Deployment:kubeflow:ml-pipeline-ui
 spec:
   # Reap the Job (and its Pods) 10 min after completion. The SA + RBAC
   # don't get auto-reaped; operator deletes them manually or re-runs

@@ -58,6 +58,10 @@ kind: Job
 metadata:
   name: install-kubeflow-training-operator
   namespace: kubeflow
+  annotations:
+    outpost.dhnt.io/lifecycle: installer
+    outpost.dhnt.io/installs: >-
+      apps/v1:Deployment:kubeflow:training-operator
 spec:
   ttlSecondsAfterFinished: 600
   backoffLimit: 3
