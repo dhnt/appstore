@@ -24,5 +24,8 @@ spec:
     version: "1.9.2"
   targetNamespace: "{{.UserNamespace}}"
   rbac:
-    clusterScoped: false
+    # Radar's upstream chart creates a ClusterRole and ClusterRoleBinding for
+    # its read-only inventory (nodes, namespaces, PVs, storage classes, etc.).
+    # Keep this truthful even though writes and privileged features are off.
+    clusterScoped: true
   defaultValuesFile: values.yaml

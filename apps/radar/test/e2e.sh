@@ -20,6 +20,7 @@ kubectl create namespace "$namespace" >/dev/null
 helm install "$release" "$repo_name/radar" \
   --version "$chart_version" \
   --namespace "$namespace" \
+  --values "$HERE/../values.yaml" \
   --set auth.mode=proxy \
   --set basePath=/radar \
   --set mcp.enabled=false \
@@ -29,4 +30,6 @@ helm install "$release" "$repo_name/radar" \
 
 kubectl rollout status deployment/"$release" --namespace "$namespace" --timeout=5m >/dev/null
 kubectl get service "$release" --namespace "$namespace" >/dev/null
+kubectl get clusterrole "$release" >/dev/null
+kubectl get clusterrolebinding "$release" >/dev/null
 echo "radar chart ${chart_version}: install and service smoke passed"

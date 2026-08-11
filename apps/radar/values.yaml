@@ -8,8 +8,11 @@ auth:
     userHeader: X-Forwarded-User
     groupsHeader: X-Forwarded-Groups
 
-# Cloudbox's service proxy forwards this app below a stable subpath.
-basePath: /matrix/cluster/svc/radar/radar
+# Leave basePath empty: the generic app-store service proxy route does not
+# guarantee a no-strip subpath, and the catalog has no app-specific route
+# contract. Operators with an ingress that preserves a prefix may set this in
+# an install override.
+basePath: ""
 
 # The catalog does not enable Radar's agent-facing MCP endpoint by default.
 # Operators can opt in after reviewing their cluster's auth and RBAC policy.
