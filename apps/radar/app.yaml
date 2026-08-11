@@ -1,0 +1,28 @@
+apiVersion: appstore.dhnt.io/v1
+kind: AppEntry
+metadata:
+  id: radar
+  name: Radar
+  version: "1.9.2"
+  categories: [monitoring, dev-tools, kubernetes]
+  tags: [experimental, kubernetes-ui, topology, local-first, helm, gitops]
+  maintainers:
+    - name: dhnt
+      email: ops@dhnt.io
+  visibility: public
+  description: >
+    Experimental local-first Kubernetes UI from Skyhook with topology,
+    resources, Helm and GitOps views. A lightweight alternative to Headlamp;
+    Headlamp remains available as the cluster dashboard builtin.
+  homepage: https://github.com/skyhook-io/radar
+  featured: false
+spec:
+  chart:
+    repo: https://skyhook-io.github.io/helm-charts
+    name: radar
+    # Radar chart 1.9.2 ships app/image 1.9.2 and is Apache-2.0 licensed.
+    version: "1.9.2"
+  targetNamespace: "{{.UserNamespace}}"
+  rbac:
+    clusterScoped: false
+  defaultValuesFile: values.yaml

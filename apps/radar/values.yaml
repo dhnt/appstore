@@ -1,0 +1,25 @@
+# Radar is experimental in the catalog. Keep the shared service protected:
+# proxy mode rejects requests without the identity header supplied by the
+# deployment's authenticating proxy. Do not change this to auth.mode=none for
+# a reachable deployment.
+auth:
+  mode: proxy
+  proxy:
+    userHeader: X-Forwarded-User
+    groupsHeader: X-Forwarded-Groups
+
+# Cloudbox's service proxy forwards this app below a stable subpath.
+basePath: /matrix/cluster/svc/radar/radar
+
+# The catalog does not enable Radar's agent-facing MCP endpoint by default.
+# Operators can opt in after reviewing their cluster's auth and RBAC policy.
+mcp:
+  enabled: false
+
+# Read-only defaults minimize the blast radius of an experimental dashboard.
+rbac:
+  helm: false
+  secrets: false
+  podExec: false
+  podLogs: true
+  portForward: false

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Radar">
+  <circle cx="32" cy="32" r="27" fill="none" stroke="currentColor" stroke-width="4"/>
+  <path d="M32 32 51 13M32 32 17 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="5" fill="currentColor"/>
+  <path d="M32 5v8M59 32h-8M32 59v-8M5 32h8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+</svg>
