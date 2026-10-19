@@ -16,7 +16,7 @@ Reference "custom app on tessaro", installable into a user's DKS namespace.
    `{{.UserNamespace}}`. **Pending:** the chart must be published to the Helm repo
    named in `app.yaml` (`spec.chart.repo`); the chart source is in-repo under
    `examples/hello-tessaro/chart/`. Publish recipe is the same as the other
-   first-party charts (kg-ui): push `chart/` to a `-charts` repo served over
+   first-party charts: push `chart/` to a `-charts` repo served over
    Pages, then bump `spec.chart.version` here.
 
 ## Post-install

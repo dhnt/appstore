@@ -12,6 +12,17 @@ per-user namespace with one click.
 benchmark commands are published in [`STATS.md`](./STATS.md) — every
 result is reproducible from `apps/<id>/test/perf.sh`.
 
+## Host applications
+
+[kb-ui — Local Knowledge](https://github.com/qiangli/bashy/tree/main/examples/local-knowledge)
+runs on the host beside Bashy's shared document index. Build and launch it with
+the example DAG, then select the directories to index. Its offline UI provides
+search, source previews, progress and pause/resume through the shared service.
+Register that host service with outpost for proxy access when needed.
+
+kb-ui has no DKS chart entry: a cluster pod does not share the host's selected
+filesystem or index state. The example documents its supported local launch.
+
 ## License
 
 **This catalog repo** (`dhnt/appstore`) is open source — see
