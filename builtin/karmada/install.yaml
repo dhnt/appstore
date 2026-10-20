@@ -39,9 +39,8 @@
 #     `federation on|off` performs (the k3s data volume is kept).
 #
 # Caveats:
-#   - Requires cluster egress to github.com (chart tarball; the operator
-#     also downloads the Karmada CRD tarball of its own version by
-#     default, spec.crdTarball / crdDownloadPolicy IfNotPresent),
+#   - Requires cluster egress to github.com (chart tarball and pinned
+#     Karmada v1.19.0 CRD tarball),
 #     docker.io and registry.k8s.io (images). Air-gapped planes must
 #     mirror and set spec.privateRegistry.
 #   - A single-replica control plane (MVP: peer <-> peer, Pull mode). No HA.
@@ -191,6 +190,8 @@ spec:
           spec:
             crdTarball:
               crdDownloadPolicy: IfNotPresent
+              httpSource:
+                url: https://github.com/karmada-io/karmada/releases/download/v1.19.0/crds.tar.gz
             components:
               etcd:
                 local:

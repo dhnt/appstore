@@ -63,9 +63,8 @@ pulled by `karmadactl register`, not by this bundle.
 
 ## Requirements and caveats
 
-- Egress from the plane to `github.com` (chart tarball; the operator also
-  fetches the Karmada CRD tarball for its own version, `crdDownloadPolicy:
-  IfNotPresent`), `docker.io` and `registry.k8s.io`. Air-gapped planes must
+- Egress from the plane to `github.com` (chart tarball and the pinned v1.19.0
+  Karmada CRD tarball), `docker.io` and `registry.k8s.io`. Air-gapped planes must
   mirror and set `spec.privateRegistry`.
 - A default StorageClass (DKS: `local-path`, made default by
   `builtin/core-storage`). The etcd PVC lives on the k3s data volume, which
