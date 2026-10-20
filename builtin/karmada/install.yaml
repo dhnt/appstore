@@ -1,0 +1,277 @@
+# Karmada — multi-cluster federation control plane (karmada-io/karmada),
+# installed through the upstream karmada-operator and one `Karmada` CR.
+#
+# Same bootstrap-Job pattern as builtin/headlamp (and kubeflow /
+# training-operators / pachyderm). The Job:
+#   1. downloads the pinned karmada-operator Helm chart tarball from the
+#      v1.19.0 GitHub release and verifies its sha256 — fail closed, no
+#      index/"latest" lookup;
+#   2. `helm upgrade --install karmada-operator` into karmada-system;
+#   3. waits for the karmadas.operator.karmada.io CRD to be Established
+#      and the operator Deployment to roll out;
+#   4. applies the `Karmada` CR below (name `karmada`, namespace
+#      karmada-system);
+#   5. waits for the CR condition Ready with --timeout 15m.
+#
+# Pins (W0 spike record, dhnt docs/dks-federation-karmada.md §9, 2026-10-20):
+#   Karmada            v1.19.0 (latest stable at pin time; Apache-2.0)
+#   operator chart     karmada-operator v1.19.0 (appVersion v1.19.0)
+#     tarball  https://github.com/karmada-io/karmada/releases/download/v1.19.0/karmada-operator-chart-v1.19.0.tgz
+#     sha256   1b1b7d7e9aa987fe69e1141bbd1cd3f2a4667b73c6cc8ad03f96294596215c69
+#   images (multi-arch linux amd64+arm64; the CR pins the tags explicitly,
+#   which equal the operator's v1.19.0 defaults — README lists the digests):
+#     docker.io/karmada/karmada-operator:v1.19.0
+#     docker.io/karmada/karmada-{aggregated-apiserver,controller-manager,scheduler,webhook}:v1.19.0
+#     registry.k8s.io/kube-apiserver:v1.36.2, registry.k8s.io/kube-controller-manager:v1.36.2
+#     registry.k8s.io/etcd:3.6.8-0
+#
+# Post-install:
+#   - the federation apiserver is Service karmada-system/karmada-apiserver
+#     (ClusterIP, container port 5443); the host side (outpost
+#     `cluster federation on`) publishes it on 127.0.0.1:15443;
+#   - the admin kubeconfig is Secret karmada-system/karmada-admin-config,
+#     key `karmada.config` (the CR's status.secretRef points at it);
+#   - certSANs are exactly 127.0.0.1 and karmada-apiserver.karmada-system.svc
+#     (the publisher pattern — no LoadBalancer / NodePort);
+#   - etcd state lives in a PVC on the cluster default StorageClass
+#     (local-path, set default by builtin/core-storage) so it survives
+#     etcd pod restarts AND the control-plane container recreation that
+#     `federation on|off` performs (the k3s data volume is kept).
+#
+# Caveats:
+#   - Requires cluster egress to github.com (chart tarball; the operator
+#     also downloads the Karmada CRD tarball of its own version by
+#     default, spec.crdTarball / crdDownloadPolicy IfNotPresent),
+#     docker.io and registry.k8s.io (images). Air-gapped planes must
+#     mirror and set spec.privateRegistry.
+#   - A single-replica control plane (MVP: peer <-> peer, Pull mode). No HA.
+#   - The karmada-installer ServiceAccount + cluster-admin binding persist
+#     after the Job's TTL, same as headlamp; re-running the install
+#     (`outpost bundle install karmada` / POST /api/cluster/install/karmada)
+#     is idempotent: helm upgrade --install + kubectl apply.
+#   - Memory: expect ~1.5-2 GB at rest on top of DKS for the federation
+#     control plane (W0 provisional; measured numbers land in the design
+#     doc §Closure).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: karmada-system
+  labels:
+    outpost.dhnt.io/managed: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: karmada-installer
+  namespace: karmada-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: karmada-installer-admin
+  labels:
+    outpost.dhnt.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: karmada-installer
+  namespace: karmada-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: install-karmada
+  namespace: karmada-system
+  annotations:
+    outpost.dhnt.io/lifecycle: installer
+    # Durable outputs: the operator Deployment the chart creates, the
+    # Karmada CR the Job applies, and the Service / Secret the operator
+    # materialises once the CR is Ready (status.apiServerService /
+    # status.secretRef).
+    outpost.dhnt.io/installs: >-
+      apps/v1:Deployment:karmada-system:karmada-operator,
+      operator.karmada.io/v1alpha1:Karmada:karmada-system:karmada,
+      v1:Service:karmada-system:karmada-apiserver,
+      v1:Secret:karmada-system:karmada-admin-config
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: karmada-installer
+      restartPolicy: OnFailure
+      containers:
+      - name: installer
+        # alpine/k8s ships helm + kubectl + curl together (same image as
+        # builtin/headlamp; alpine/helm alone lacks kubectl).
+        image: alpine/k8s:1.30.5
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          # Log capture as in builtin/headlamp: redirect this shell into
+          # /tmp/install.log, capture each phase's rc explicitly, ALWAYS
+          # publish the log as ConfigMap karmada-system/install-log at the
+          # end (success or failure), then exit with the worst rc. Phases
+          # after a failed one still run (they are idempotent) so the log
+          # shows how far the plane got.
+          LOG=/tmp/install.log
+          : > "$LOG"
+          exec >>"$LOG" 2>&1
+
+          KARMADA_VERSION=v1.19.0
+          CHART_URL="https://github.com/karmada-io/karmada/releases/download/${KARMADA_VERSION}/karmada-operator-chart-${KARMADA_VERSION}.tgz"
+          CHART_SHA256=1b1b7d7e9aa987fe69e1141bbd1cd3f2a4667b73c6cc8ad03f96294596215c69
+          CHART=/tmp/karmada-operator-chart.tgz
+          rc=0
+
+          echo "==> [step 1] fetch pinned karmada-operator chart ${KARMADA_VERSION}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$CHART" "$CHART_URL"
+          step1=$?
+          [ $rc -eq 0 ] && rc=$step1
+
+          echo "==> [step 2] verify chart sha256 (fail closed)"
+          step2=1
+          if [ $step1 -eq 0 ]; then
+            echo "${CHART_SHA256}  ${CHART}" | sha256sum -c -
+            step2=$?
+          fi
+          [ $rc -eq 0 ] && rc=$step2
+
+          echo "==> [step 3] helm upgrade --install karmada-operator"
+          step3=1
+          if [ $step2 -eq 0 ]; then
+            # installCRDs=true + crds.keep=true are the chart defaults: the
+            # karmadas.operator.karmada.io CRD is created by the release and
+            # kept on uninstall. Operator image: docker.io/karmada/karmada-operator
+            # tag = chart's karmadaOperatorImageVersion (v1.19.0); pinned
+            # explicitly so a values drift can never float the tag.
+            helm upgrade --install karmada-operator "$CHART" \
+              --namespace karmada-system \
+              --set installCRDs=true \
+              --set crds.keep=true \
+              --set operator.image.registry=docker.io \
+              --set operator.image.repository=karmada/karmada-operator \
+              --set operator.image.tag=${KARMADA_VERSION} \
+              --set operator.replicaCount=1 \
+              --wait \
+              --timeout 5m
+            step3=$?
+          fi
+          [ $rc -eq 0 ] && rc=$step3
+
+          echo "==> [step 4] wait for CRD karmadas.operator.karmada.io Established + operator rollout"
+          kubectl wait --for=condition=Established \
+            crd/karmadas.operator.karmada.io --timeout=5m
+          step4=$?
+          if [ $step4 -eq 0 ]; then
+            kubectl -n karmada-system rollout status deployment/karmada-operator --timeout=5m
+            step4=$?
+          fi
+          [ $rc -eq 0 ] && rc=$step4
+
+          echo "==> [step 5] apply Karmada CR karmada-system/karmada"
+          # Field names are the v1alpha1 CRD's (operator chart v1.19.0):
+          # components.<name>.{imageRepository,imageTag,replicas},
+          # karmadaAPIServer.{certSANs,serviceType},
+          # etcd.local.volumeData.{volumeClaim|hostPath|emptyDir}.
+          # Image tags equal the operator's own v1.19.0 defaults; they are
+          # written out so the pin is visible and does not depend on the
+          # operator's defaulting.
+          kubectl apply -f - <<'EOF'
+          apiVersion: operator.karmada.io/v1alpha1
+          kind: Karmada
+          metadata:
+            name: karmada
+            namespace: karmada-system
+            labels:
+              outpost.dhnt.io/managed: "true"
+          spec:
+            crdTarball:
+              crdDownloadPolicy: IfNotPresent
+            components:
+              etcd:
+                local:
+                  imageRepository: registry.k8s.io/etcd
+                  imageTag: 3.6.8-0
+                  replicas: 1
+                  volumeData:
+                    volumeClaim:
+                      metadata:
+                        name: karmada-etcd-data
+                      spec:
+                        accessModes:
+                        - ReadWriteOnce
+                        resources:
+                          requests:
+                            storage: 4Gi
+              karmadaAPIServer:
+                imageRepository: registry.k8s.io/kube-apiserver
+                imageTag: v1.36.2
+                replicas: 1
+                serviceType: ClusterIP
+                certSANs:
+                - "127.0.0.1"
+                - "karmada-apiserver.karmada-system.svc"
+              kubeControllerManager:
+                imageRepository: registry.k8s.io/kube-controller-manager
+                imageTag: v1.36.2
+                replicas: 1
+              karmadaAggregatedAPIServer:
+                imageRepository: docker.io/karmada/karmada-aggregated-apiserver
+                imageTag: v1.19.0
+                replicas: 1
+              karmadaControllerManager:
+                imageRepository: docker.io/karmada/karmada-controller-manager
+                imageTag: v1.19.0
+                replicas: 1
+              karmadaScheduler:
+                imageRepository: docker.io/karmada/karmada-scheduler
+                imageTag: v1.19.0
+                replicas: 1
+              karmadaWebhook:
+                imageRepository: docker.io/karmada/karmada-webhook
+                imageTag: v1.19.0
+                replicas: 1
+          EOF
+          step5=$?
+          [ $rc -eq 0 ] && rc=$step5
+
+          echo "==> [step 6] wait for karmada/karmada condition Ready (<= 15m)"
+          # The operator sets condition type Ready after it stores
+          # status.secretRef (the admin kubeconfig Secret). 15 minutes covers
+          # image pulls for 7 components on a cold peer plane.
+          kubectl -n karmada-system wait --for=condition=Ready \
+            karmada/karmada --timeout=15m
+          step6=$?
+          [ $rc -eq 0 ] && rc=$step6
+
+          echo "==> [step 7] report"
+          kubectl -n karmada-system get karmada karmada -o jsonpath='{.status.karmadaVersion}{"\n"}'
+          kubectl -n karmada-system get karmada karmada -o jsonpath='{.status.secretRef.namespace}/{.status.secretRef.name}{"\n"}'
+          kubectl -n karmada-system get svc karmada-apiserver -o wide
+          kubectl -n karmada-system get pods -o wide
+
+          echo "==> [final] step results: fetch=$step1 sha256=$step2 helm-install=$step3 crd-rollout=$step4 cr-apply=$step5 cr-ready=$step6 final_rc=$rc"
+
+          # Always publish the log to a ConfigMap, even on failure; twice so
+          # the final line is included (same as builtin/headlamp).
+          kubectl create cm install-log -n karmada-system \
+            --from-file=install.log="$LOG" \
+            --dry-run=client -o yaml \
+            | kubectl apply -f - 1>>"$LOG" 2>>"$LOG"
+          kubectl create cm install-log -n karmada-system \
+            --from-file=install.log="$LOG" \
+            --dry-run=client -o yaml \
+            | kubectl apply -f - 1>>"$LOG" 2>>"$LOG"
+
+          exit $rc
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1
+            memory: 512Mi
