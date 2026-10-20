@@ -30,8 +30,8 @@ vendored and nothing upstream is forked.
    operator Deployment to roll out.
 4. Apply `Karmada` `karmada-system/karmada`:
    `certSANs: [127.0.0.1, karmada-apiserver.karmada-system.svc]`,
-   `serviceType: ClusterIP`, one replica per component, etcd data on a PVC
-   (`karmada-etcd-data`, cluster default StorageClass), component images
+   `serviceType: ClusterIP`, one replica per component, etcd data under the
+   Outpost runtime's persisted storage path, component images
    pinned to the tags below.
 5. `kubectl -n karmada-system wait --for=condition=Ready karmada/karmada --timeout=15m`.
 6. Publish the full log as ConfigMap `karmada-system/install-log`.
@@ -66,9 +66,9 @@ pulled by `karmadactl register`, not by this bundle.
 - Egress from the plane to `github.com` (chart tarball and the pinned v1.19.0
   Karmada CRD tarball), `docker.io` and `registry.k8s.io`. Air-gapped planes must
   mirror and set `spec.privateRegistry`.
-- A default StorageClass (DKS: `local-path`, made default by
-  `builtin/core-storage`). The etcd PVC lives on the k3s data volume, which
-  survives control-plane container recreation.
+- The single etcd replica uses a host path under the Outpost runtime's
+  persisted `/var/lib/rancher/k3s/storage` volume. It survives runtime
+  container recreation and stays on that one member node.
 - Single replica everywhere: an MVP for peer ↔ peer federation. No HA.
 - Expect roughly 1.5–2 GB of memory at rest on top of DKS (provisional until
   measured).

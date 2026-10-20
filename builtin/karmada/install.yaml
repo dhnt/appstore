@@ -33,8 +33,8 @@
 #     key `karmada.config` (the CR's status.secretRef points at it);
 #   - certSANs are exactly 127.0.0.1 and karmada-apiserver.karmada-system.svc
 #     (the publisher pattern — no LoadBalancer / NodePort);
-#   - etcd state lives in a PVC on the cluster default StorageClass
-#     (local-path, set default by builtin/core-storage) so it survives
+#   - etcd state lives in the Outpost runtime's persistent storage mount
+#     (/var/lib/rancher/k3s/storage) so it survives
 #     etcd pod restarts AND the control-plane container recreation that
 #     `federation on|off` performs (the k3s data volume is kept).
 #
@@ -199,15 +199,9 @@ spec:
                   imageTag: 3.6.8-0
                   replicas: 1
                   volumeData:
-                    volumeClaim:
-                      metadata:
-                        name: karmada-etcd-data
-                      spec:
-                        accessModes:
-                        - ReadWriteOnce
-                        resources:
-                          requests:
-                            storage: 4Gi
+                    hostPath:
+                      type: DirectoryOrCreate
+                      path: /var/lib/rancher/k3s/storage/karmada-etcd
               karmadaAPIServer:
                 imageRepository: registry.k8s.io/kube-apiserver
                 imageTag: v1.36.2
